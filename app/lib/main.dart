@@ -88,6 +88,7 @@ import 'package:omi/providers/user_provider.dart';
 import 'package:omi/providers/voice_recorder_provider.dart';
 import 'package:omi/providers/phone_call_provider.dart';
 import 'package:omi/services/auth_service.dart';
+import 'package:omi/services/privacy_capture/privacy_capture_feature.dart';
 import 'package:omi/ui/omi_theme.dart';
 import 'package:omi/ui/omi_tokens.dart';
 import 'package:omi/services/notifications.dart';
@@ -278,7 +279,7 @@ Future _init() async {
     );
   }
 
-  if (Env.profile.usesFirebaseAuthEmulator) {
+  if (Env.profile.usesFirebaseAuthEmulator && !privacyCaptureEnabled) {
     await PhysicalQualification.startupStage(
       'auth_emulator',
       () => FirebaseAuth.instance.useAuthEmulator(Env.firebaseAuthEmulatorHost, Env.firebaseAuthEmulatorPort),
@@ -295,6 +296,10 @@ Future _init() async {
   }
 
   await PhysicalQualification.startupStage('shared_preferences', SharedPreferencesUtil.init);
+  if (privacyCaptureEnabled) {
+    await SharedPreferencesUtil().setCaptureMuted(true);
+    await PrivacyCaptureHost.ensureReady();
+  }
   // Persisted override must be live before auth resolution and product traffic.
   BackendUrlOverride.restore(SharedPreferencesUtil().customBackendUrl);
   // ConnectivityService snapshots its health-check URLs when ServiceManager

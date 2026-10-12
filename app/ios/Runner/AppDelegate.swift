@@ -501,6 +501,36 @@ final class QuickActionsIconPatcher: NSObject {
         }
     }
 
+    let privacyFiles = FlutterMethodChannel(name: "com.omi.privacy_capture/files", binaryMessenger: messenger)
+    privacyFiles.setMethodCallHandler { call, result in
+        guard call.method == "protect",
+              let args = call.arguments as? [String: Any],
+              let path = args["path"] as? String else {
+            result(FlutterMethodNotImplemented)
+            return
+        }
+        do {
+            try FileManager.default.setAttributes(
+                [.protectionKey: FileProtectionType.complete],
+                ofItemAtPath: path
+            )
+            var url = URL(fileURLWithPath: path)
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try url.setResourceValues(values)
+            let attrs = try FileManager.default.attributesOfItem(atPath: path)
+            let protection = attrs[.protectionKey] as? FileProtectionType
+            let readBack = try url.resourceValues(forKeys: [.isExcludedFromBackupKey])
+            guard protection == .complete, readBack.isExcludedFromBackup == true else {
+                result(false)
+                return
+            }
+            result(true)
+        } catch {
+            result(FlutterError(code: "protect_failed", message: nil, details: nil))
+        }
+    }
+
     // Audio session configuration for Bluetooth microphone support
     let audioSessionChannel = FlutterMethodChannel(name: "com.omi.ios/audioSession", binaryMessenger: messenger)
     audioSessionChannel.setMethodCallHandler { (call, result) in

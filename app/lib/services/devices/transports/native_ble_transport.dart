@@ -185,6 +185,36 @@ class NativeBleTransport extends DeviceTransport implements CaptureSubscriptionE
 
   // MARK: - Characteristic Streams
 
+  Future<void> releaseCharacteristic(String serviceUuid, String characteristicUuid) async {
+    final key = '${serviceUuid.toLowerCase()}:${characteristicUuid.toLowerCase()}';
+    _activeSubscriptionKeys.remove(key);
+    _subscribedSubscriptionKeys.remove(key);
+    _pendingSubscriptions.remove(key);
+    final controller = _streamControllers.remove(key);
+    try {
+      await _hostApi.unsubscribeCharacteristic(_peripheralUuid, serviceUuid, characteristicUuid);
+    } catch (_) {}
+    if (controller != null && !controller.isClosed) {
+      await controller.close();
+    }
+    if (isBleAudioCharacteristicUuid(characteristicUuid)) {
+      _audioLivenessTimer?.cancel();
+    }
+  }
+
+  Future<bool> confirmNotification(String serviceUuid, String characteristicUuid) async {
+    getCharacteristicStream(serviceUuid, characteristicUuid);
+    final key = '${serviceUuid.toLowerCase()}:${characteristicUuid.toLowerCase()}';
+    final deadline = DateTime.now().add(subscriptionTimeout);
+    while (_pendingSubscriptions.containsKey(key) && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
+    if (!_subscribedSubscriptionKeys.contains(key)) {
+      await _subscribeCharacteristic(serviceUuid, characteristicUuid, force: true);
+    }
+    return _subscribedSubscriptionKeys.contains(key);
+  }
+
   @override
   Stream<List<int>> getCharacteristicStream(String serviceUuid, String characteristicUuid) {
     final key = '${serviceUuid.toLowerCase()}:${characteristicUuid.toLowerCase()}';

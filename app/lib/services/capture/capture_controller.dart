@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:omi/services/privacy_capture/privacy_capture_feature.dart';
 import 'package:omi/services/capture/uplink_silence_timer.dart';
 import 'package:omi/services/wals/sync_wake_scope.dart';
 import 'dart:convert';
@@ -417,6 +418,7 @@ class CaptureController extends ChangeNotifier
       await _microphonePermissionRequester?.call() ?? (await Permission.microphone.request()).isGranted;
 
   Future<Object?> _restartPhoneMicRecording() async {
+    if (privacyCaptureEnabled) return null;
     if (_phoneMicRestartInFlight || _capture.readModel.phase != CapturePhase.phoneLive) return null;
     _phoneMicRestartInFlight = true;
     final token = _sessionOwner?.token;
@@ -745,6 +747,7 @@ class CaptureController extends ChangeNotifier
   /// The shared policy is the admission authority for Dart and native sinks.
   /// Persistence completion acknowledges the durable intent, not OS teardown.
   Future<int> _setCaptureMuted(bool muted) async {
+    if (privacyCaptureEnabled) muted = true;
     _uplinkSilence.cancel();
     if (!muted && silencePaused) await _preferences.saveBool(_silencePausedKey, false);
     final pending = _preferences.setCaptureMuted(muted);
@@ -1013,6 +1016,7 @@ class CaptureController extends ChangeNotifier
   }
 
   Future<void> _setIngressAuthorized(bool authorized) async {
+    if (privacyCaptureEnabled) authorized = false;
     final port = _ingressPort;
     if (port == null) return;
     final target = authorized && _recordingDevice?.type == DeviceType.omi ? _recordingDevice!.id : null;
@@ -1900,6 +1904,10 @@ class CaptureController extends ChangeNotifier
   }
 
   void _handleButtonEvent(String deviceId, int buttonState) {
+    if (buttonState == 2 && privacyCaptureEnabled) {
+      return;
+    }
+
     // Intercept for interactive device onboarding
     if (deviceOnboardingProvider?.isOnboardingActive == true) {
       deviceOnboardingProvider!.onButtonEvent(buttonState);
@@ -2232,6 +2240,14 @@ class CaptureController extends ChangeNotifier
   }
 
   Future<void> _initiateDeviceAudioStreaming() async {
+    if (privacyCaptureEnabled) {
+      final device = _recordingDevice;
+      if (device != null) {
+        final connection = await _ensureDeviceConnection(device.id);
+        await PrivacyCaptureHost.ensureAudioOff(connection?.transport);
+      }
+      return;
+    }
     if (_fenceUplinkForSync()) return;
     final device = _recordingDevice;
     final staged = _capture.stagedReadModel;
@@ -2934,6 +2950,7 @@ class CaptureController extends ChangeNotifier
   /// (_activeSource stays null). [auto] selects the file marker: false = explicit
   /// Transcribe Later, true = automatic offline fallback.
   Future<Object?> _startPhoneMicBatchBody({required bool auto}) async {
+    if (privacyCaptureEnabled) return null;
     updateRecordingState(RecordingState.initialising);
     final micPermissionGranted = _prefetchedMicPermission || await _requestMicrophonePermission();
     _prefetchedMicPermission = false;

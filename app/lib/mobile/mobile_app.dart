@@ -12,6 +12,8 @@ import 'package:omi/services/account_cutover/account_cutover_blocking_gate.dart'
 import 'package:omi/services/auth/auth_token_result.dart';
 import 'package:omi/utils/alerts/app_snackbar.dart';
 import 'package:omi/ui/ui.dart';
+import 'package:omi/services/privacy_capture/privacy_capture_feature.dart';
+import 'package:omi/services/privacy_capture/privacy_standalone.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 
 class MobileApp extends StatefulWidget {
@@ -42,6 +44,7 @@ class _MobileAppState extends State<MobileApp> {
 
   @override
   Widget build(BuildContext context) {
+    if (privacyCaptureEnabled) return const PrivacyStandalonePage();
     return Consumer<AuthenticationProvider>(
       builder: (context, authProvider, child) {
         if (authProvider.requiresReauthentication) {

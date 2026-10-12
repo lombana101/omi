@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import 'package:omi/pages/onboarding/widgets/onboarding_card.dart';
 import 'package:omi/providers/auth_provider.dart';
+import 'package:omi/services/privacy_capture/privacy_capture_feature.dart';
 import 'package:omi/ui/ui.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 
@@ -119,7 +120,7 @@ class _AuthComponentState extends State<AuthComponent> {
               // because provider OAuth clients are bound to the official
               // bundle id and a community build is signed with a suffixed
               // one. Never shown in a production-family build.
-              if (provider.isLocalDevProfile) ...[
+              if (provider.isLocalDevProfile && !privacyCaptureEnabled) ...[
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
