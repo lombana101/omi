@@ -189,7 +189,7 @@ class _DeviceSelectionPageState extends State<DeviceSelectionPage> with SingleTi
                           const SizedBox(height: 12),
                           TextButton(
                             onPressed: () => routeToPage(context, const PrivacyCapturePage()),
-                            child: const Text('Privacy capture settings'),
+                            child: const Text('Privacy capture settings'), // omi-ux-allow: hardcoded-text -- gated personal build only
                           ),
                         ],
                       ],
