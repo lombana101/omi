@@ -8,6 +8,8 @@ import 'package:version/version.dart';
 
 import 'package:omi/backend/schema/bt_device/bt_device.dart';
 import 'package:omi/services/devices.dart';
+import 'package:omi/services/privacy_capture/privacy_capture_feature.dart';
+import 'package:omi/services/privacy_capture/privacy_off_link.dart';
 import 'package:omi/services/devices/connectors/device_connection.dart';
 import 'package:omi/services/devices/transports/native_ble_transport.dart';
 import 'package:omi/services/devices/models.dart';
@@ -394,6 +396,13 @@ class OmiDeviceConnection extends DeviceConnection {
   Future<StreamSubscription?> performGetBleAudioBytesListener({
     required void Function(List<int>) onAudioBytesReceived,
   }) async {
+    if (privacyCaptureEnabled &&
+        privacyBlocksStockAudio(
+          privacyMode: true,
+          recordingAuthorized: PrivacyCaptureHost.controller.recording,
+        )) {
+      return null;
+    }
     try {
       await _enableLiveCustody();
       final stream = transport.getCharacteristicStream(omiServiceUuid, audioDataStreamCharacteristicUuid);

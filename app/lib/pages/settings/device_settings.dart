@@ -18,6 +18,8 @@ import 'package:omi/pages/settings/device/device_control_sheets.dart';
 import 'package:omi/pages/settings/device/device_info_groups.dart';
 import 'package:omi/pages/settings/device/device_page_header.dart';
 import 'package:omi/pages/settings/device_diagnostics.dart';
+import 'package:omi/pages/settings/privacy_capture_page.dart';
+import 'package:omi/services/privacy_capture/privacy_capture_feature.dart';
 import 'package:omi/providers/capture_provider.dart';
 import 'package:omi/providers/device_provider.dart';
 import 'package:omi/providers/sync_provider.dart';
@@ -401,6 +403,14 @@ class _DeviceSettingsState extends State<DeviceSettings> {
     return OmiSettingsGroup(
       header: l10n.customizationSection,
       children: [
+        if (privacyCaptureEnabled)
+          OmiSettingsRow(
+            leading: const FaIcon(FontAwesomeIcons.handPointer),
+            title: 'Privacy capture',
+            value: 'Off until double-tap',
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PrivacyCapturePage())),
+            showChevron: true,
+          ),
         if (supportsFind)
           OmiSettingsRow(
             key: const Key('find_device_button'),

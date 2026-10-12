@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import 'package:omi/pages/onboarding/wrapper.dart';
+import 'package:omi/pages/settings/privacy_capture_page.dart';
+import 'package:omi/services/privacy_capture/privacy_capture_feature.dart';
 import 'package:omi/ui/omi_tokens.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/utils/logger.dart';
@@ -180,6 +182,13 @@ class _DeviceSelectionPageState extends State<DeviceSelectionPage> with SingleTi
                             ),
                           ),
                         ),
+                        if (privacyCaptureEnabled) ...[
+                          const SizedBox(height: 12),
+                          TextButton(
+                            onPressed: () => routeToPage(context, const PrivacyCapturePage()),
+                            child: const Text('Privacy capture settings'),
+                          ),
+                        ],
                       ],
                     ),
                   ),
