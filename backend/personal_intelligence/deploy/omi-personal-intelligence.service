@@ -1,0 +1,47 @@
+[Unit]
+Description=Omi Personal Intelligence API
+Documentation=file:///opt/omi-personal-intelligence/current/backend/personal_intelligence/DEPLOYMENT.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=omi-intelligence
+Group=omi-intelligence
+WorkingDirectory=/opt/omi-personal-intelligence/current/backend
+EnvironmentFile=/etc/omi-personal-intelligence/personal-intelligence.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStartPre=/opt/omi-personal-intelligence/current/.venv/bin/python -c 'from personal_intelligence.config import Settings; Settings.from_env()'
+ExecStart=/opt/omi-personal-intelligence/current/.venv/bin/python -m personal_intelligence
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+UMask=0077
+LimitCORE=0
+
+# The only writable service-owned location is the SQLite state directory.
+StateDirectory=omi-personal-intelligence
+StateDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

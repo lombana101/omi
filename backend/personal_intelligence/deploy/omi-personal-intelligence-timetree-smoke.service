@@ -1,0 +1,33 @@
+[Unit]
+Description=Read-only TimeTree authentication smoke test for Omi Personal Intelligence
+Documentation=file:///opt/omi-personal-intelligence/current/backend/personal_intelligence/DEPLOYMENT.md
+After=omi-personal-intelligence.service
+
+[Service]
+Type=oneshot
+User=omi-intelligence
+Group=omi-intelligence
+WorkingDirectory=/opt/omi-personal-intelligence/current/backend
+EnvironmentFile=/etc/omi-personal-intelligence/personal-intelligence.env
+ExecStart=/opt/omi-personal-intelligence/current/backend/personal_intelligence/deploy/timetree-auth-smoke.sh
+UMask=0077
+LimitCORE=0
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
