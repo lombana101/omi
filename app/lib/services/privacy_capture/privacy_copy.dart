@@ -3,6 +3,9 @@ abstract final class PrivacyCopy {
   static const capture = 'Capture';
   static const sessions = 'Sessions';
   static const tasks = 'Tasks';
+  static const plan = 'Plan';
+  static const assistant = 'Assistant';
+  static const calendar = 'Calendar';
   static const settings = 'Settings';
   static const recordingOff = 'Recording: Off';
   static const connecting = 'Connecting';
@@ -62,6 +65,54 @@ abstract final class PrivacyCopy {
   static const today = 'Today';
   static const inbox = 'Inbox';
   static const projects = 'Projects';
+  static const habits = 'Habits';
+  static const upcoming = 'Upcoming and Unassigned';
+  static const addToToday = 'Add to Today';
+  static const removeFromToday = 'Remove from Today';
+  static const habitName = 'Habit name';
+  static const createHabit = 'Create Habit';
+  static const doneToday = 'Done Today';
+  static const notDoneToday = 'Not Done Today';
+  static const recentHistory = 'Recent history';
+  static const noNotes = 'No personal notes';
+  static const intelligence = 'Personal Intelligence';
+  static const intelligenceUrl = 'Private API base URL';
+  static const intelligenceOwner = 'Owner mapping ID';
+  static const intelligenceToken = 'Private API bearer token';
+  static const intelligenceSaved = 'Intelligence configuration saved';
+  static const intelligenceNotConfigured = 'Configure the private Ubuntu API in Settings.';
+  static const intelligenceUnavailable = 'Personal Intelligence is unavailable. Local data still works.';
+  static const intelligenceConnected = 'Private Ubuntu API connected';
+  static const clearIntelligence = 'Clear Intelligence Configuration';
+  static const askHint = 'Ask about your tasks or TimeTree';
+  static const ask = 'Ask';
+  static const extractActions = 'Find Reviewable Actions';
+  static const intelligentSuggestions = 'Find Intelligent Suggestions';
+  static const refreshCalendar = 'Refresh Calendar';
+  static const upcomingEvents = 'Upcoming TimeTree Events';
+  static const noEvents = 'No upcoming events found';
+  static const reviewCalendarChange = 'Review Calendar Change';
+  static const confirmCalendarChange = 'Confirm Exact Change';
+  static const reconcileCalendar = 'Check Calendar Operation Status';
+  static const editEventTitle = 'Edit Event Title';
+  static const deleteEvent = 'Delete Event';
+  static const saveTitle = 'Save Title';
+  static const pendingSuggestionsSaved = 'Suggestions saved for review in Plan.';
+  static const calendarUncertain = 'The result may be uncertain. Inspect TimeTree before trying another write.';
+  static const noGroundedActions = 'No grounded actions found.';
+  static const recurringSeries = 'Recurring series';
+  static const entireRecurringSeries = 'Entire recurring series';
+  static const oneNonRecurringEvent = 'One non-recurring event';
+  static const clearIntelligenceMessage = 'The private endpoint and bearer token will be removed from this phone.';
+  static const acceptHabit = 'Accept as Habit';
+  static const acceptProject = 'Accept as Project';
+  static const calendarSuggestionReview =
+      'Calendar suggestion only. Review the exact event before writing it to TimeTree.';
+  static const reviewCalendarSuggestion = 'Review in TimeTree';
+  static const chooseCalendar = 'Choose TimeTree Calendar';
+  static const noCalendars = 'No TimeTree calendars are available.';
+  static const incompleteCalendarSuggestion =
+      'This suggestion needs a start, end, and timezone before it can be reviewed.';
   static const completedFilter = 'Completed';
   static const newTask = 'New task';
   static const saveTask = 'Save task';
@@ -120,4 +171,8 @@ abstract final class PrivacyCopy {
   static const connectionSection = 'Connection';
   static const localData = 'Local data';
   static const aboutExperiment = 'About this experimental build';
+
+  static String uncertainty(double value) => 'Uncertainty: ${value.toStringAsFixed(2)}';
+
+  static String projectProgress(int completed, int total) => '$completed/$total completed';
 }

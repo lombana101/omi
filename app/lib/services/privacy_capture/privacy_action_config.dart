@@ -2,7 +2,8 @@
 class PrivacyActionConfig {
   const PrivacyActionConfig._();
 
-  static const schemaVersion = 1;
+  static const schemaVersion = 2;
+  static const oldestReadableSchemaVersion = 1;
   static const excerptMaxChars = 160;
   static const candidateTtl = Duration(hours: 48);
   static const diagnosticCap = 40;

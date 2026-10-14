@@ -5,7 +5,6 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/l10n/app_localizations.dart';
 import 'package:omi/services/privacy_capture/privacy_copy.dart';
-import 'package:omi/services/privacy_capture/privacy_models.dart';
 import 'package:omi/services/privacy_capture/privacy_shell.dart';
 import 'package:omi/services/privacy_capture/privacy_store.dart';
 import 'package:omi/services/privacy_capture/privacy_suggestion.dart';
@@ -32,6 +31,16 @@ void main() {
       await store.createProject('Home');
       await store.createProject('Work');
       await store.createTask(title: 'Call back');
+      await store.addIntelligenceCandidate(
+        sourceRef: 'manual:calendar',
+        suggestedType: 'calendar_event',
+        title: 'Focus block',
+        excerpt: 'Schedule a focus block',
+        uncertainty: 0.1,
+        proposedStartAt: DateTime.utc(2026, 10, 14, 18),
+        proposedEndAt: DateTime.utc(2026, 10, 14, 20),
+        timezone: 'America/Toronto',
+      );
     });
 
     await tester.pumpWidget(MaterialApp(
@@ -50,6 +59,7 @@ void main() {
     expect(find.text(PrivacyCopy.chooseDue), findsOneWidget);
     expect(find.text(PrivacyCopy.assignProject), findsOneWidget);
     expect(find.text(PrivacyCopy.rename), findsWidgets);
+    expect(find.text(PrivacyCopy.reviewCalendarSuggestion), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

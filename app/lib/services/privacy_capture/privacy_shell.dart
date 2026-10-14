@@ -9,13 +9,17 @@ import 'package:omi/services/privacy_capture/privacy_capture_feature.dart';
 import 'package:omi/services/privacy_capture/privacy_capture_io.dart';
 import 'package:omi/services/privacy_capture/privacy_connection_probe.dart';
 import 'package:omi/services/privacy_capture/privacy_copy.dart';
+import 'package:omi/services/privacy_capture/privacy_intelligence_client.dart';
+import 'package:omi/services/privacy_capture/privacy_intelligence_config.dart';
+import 'package:omi/services/privacy_capture/privacy_intelligence_coordinator.dart';
+import 'package:omi/services/privacy_capture/privacy_intelligence_models.dart';
+import 'package:omi/services/privacy_capture/privacy_intelligence_ui.dart';
 import 'package:omi/services/privacy_capture/privacy_models.dart';
 import 'package:omi/services/privacy_capture/privacy_off_link.dart';
 import 'package:omi/services/privacy_capture/privacy_store.dart';
 import 'package:omi/services/privacy_capture/privacy_suggestion.dart';
 import 'package:omi/services/privacy_capture/privacy_theme.dart';
 import 'package:omi/services/privacy_capture/privacy_widgets.dart';
-import 'package:omi/services/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:omi/ui/ui.dart';
 import 'package:omi/utils/other/temp.dart';
@@ -45,6 +49,7 @@ class PrivacyShell extends StatefulWidget {
     this.clock,
     this.initialTab = 0,
     this.themeStore,
+    this.intelligenceClient,
   });
 
   final Future<String> Function()? findPendant;
@@ -53,6 +58,7 @@ class PrivacyShell extends StatefulWidget {
   final DateTime Function()? clock;
   final int initialTab;
   final PrivacyThemeStore? themeStore;
+  final PrivacyIntelligenceClient? intelligenceClient;
 
   @override
   State<PrivacyShell> createState() => _PrivacyShellState();
@@ -136,7 +142,8 @@ class _PrivacyShellState extends State<PrivacyShell> with WidgetsBindingObserver
                 destinations: const [
                   NavigationDestination(icon: Icon(Icons.mic_none), label: PrivacyCopy.capture),
                   NavigationDestination(icon: Icon(Icons.list_alt), label: PrivacyCopy.sessions),
-                  NavigationDestination(icon: Icon(Icons.check_circle_outline), label: PrivacyCopy.tasks),
+                  NavigationDestination(icon: Icon(Icons.check_circle_outline), label: PrivacyCopy.plan),
+                  NavigationDestination(icon: Icon(Icons.auto_awesome_outlined), label: PrivacyCopy.assistant),
                   NavigationDestination(icon: Icon(Icons.settings_outlined), label: PrivacyCopy.settings),
                 ],
               ),
@@ -153,8 +160,20 @@ class _PrivacyShellState extends State<PrivacyShell> with WidgetsBindingObserver
       case 1:
         return _SessionsTab(store: _store, now: _now, onChanged: _refresh);
       case 2:
-        return _TasksTab(store: _store, now: _now, onChanged: _refresh);
+        return _TasksTab(
+          store: _store,
+          now: _now,
+          onChanged: _refresh,
+          intelligenceClient: widget.intelligenceClient,
+        );
       case 3:
+        return PrivacyAssistantTab(
+          store: _store,
+          now: _now,
+          onChanged: _refresh,
+          client: widget.intelligenceClient,
+        );
+      case 4:
         return _SettingsTab(
           store: _store,
           retention: _retention,
@@ -387,7 +406,7 @@ class _PrivacyShellState extends State<PrivacyShell> with WidgetsBindingObserver
 final _localState = ValueNotifier<PrivacyCaptureState>(PrivacyCaptureState.off);
 
 Future<String> _discoverPendant() async {
-  final devices = ServiceManager.instance().device;
+  final devices = PrivacyCaptureHost.devices;
   await devices.discover(timeout: 8);
   final found = devices.devices.where((device) => device.name.toLowerCase().contains('omi')).toList();
   final device = found.isEmpty ? (devices.devices.isEmpty ? null : devices.devices.first) : found.first;
@@ -489,10 +508,11 @@ class _SessionDetailState extends State<_SessionDetail> {
     }
     return Scaffold(
       appBar: AppBar(leading: const OmiBackButton(), title: const Text(PrivacyCopy.sessions)),
-      body: FutureBuilder<List<PrivacyChunkRecord>>(
-        future: widget.store.chunks(widget.session.localId),
+      body: FutureBuilder<_SessionBundle>(
+        future: _loadSession(widget.store, widget.session.localId),
         builder: (context, snapshot) {
-          final chunks = snapshot.data ?? const <PrivacyChunkRecord>[];
+          final chunks = snapshot.data?.chunks ?? const <PrivacyChunkRecord>[];
+          final notes = snapshot.data?.notes ?? const <PrivacyNoteRecord>[];
           return ListView(
             padding: const EdgeInsets.all(OmiSpacing.md),
             children: [
@@ -505,6 +525,9 @@ class _SessionDetailState extends State<_SessionDetail> {
                   onCorrect: (text) => _correct(chunk, text),
                   onCreateTask: () => _taskFrom(chunk),
                 ),
+              const PrivacySectionLabel(PrivacyCopy.ownerNote),
+              if (notes.isEmpty) const Text(PrivacyCopy.noNotes),
+              for (final note in notes) Text(note.text),
               TextField(
                 key: const Key('privacy_owner_note'),
                 controller: _note,
@@ -521,6 +544,14 @@ class _SessionDetailState extends State<_SessionDetail> {
                   await widget.onChanged();
                 },
               ),
+              PrivacyIntelligenceExtractionButton(
+                store: widget.store,
+                session: widget.session,
+                chunks: chunks,
+                notes: notes,
+                now: DateTime.now(),
+                onChanged: widget.onChanged,
+              ),
               PrivacyButton.destructive(label: PrivacyCopy.deleteSession, onPressed: _delete),
             ],
           );
@@ -528,6 +559,11 @@ class _SessionDetailState extends State<_SessionDetail> {
       ),
     );
   }
+
+  static Future<_SessionBundle> _loadSession(PrivacyStore store, String sessionId) async => _SessionBundle(
+        chunks: await store.chunks(sessionId),
+        notes: await store.notes(sessionId),
+      );
 
   Future<void> _taskFrom(PrivacyChunkRecord chunk) async {
     final title = TextEditingController(text: chunk.displayText);
@@ -616,6 +652,13 @@ class _SessionDetailState extends State<_SessionDetail> {
   }
 }
 
+class _SessionBundle {
+  const _SessionBundle({required this.chunks, required this.notes});
+
+  final List<PrivacyChunkRecord> chunks;
+  final List<PrivacyNoteRecord> notes;
+}
+
 class _ChunkEditor extends StatefulWidget {
   const _ChunkEditor({required this.chunk, required this.onCorrect, required this.onCreateTask});
 
@@ -667,11 +710,17 @@ class _ChunkEditorState extends State<_ChunkEditor> {
 }
 
 class _TasksTab extends StatelessWidget {
-  const _TasksTab({required this.store, required this.now, required this.onChanged});
+  const _TasksTab({
+    required this.store,
+    required this.now,
+    required this.onChanged,
+    required this.intelligenceClient,
+  });
 
   final PrivacyStore? store;
   final DateTime now;
   final Future<void> Function() onChanged;
+  final PrivacyIntelligenceClient? intelligenceClient;
 
   @override
   Widget build(BuildContext context) {
@@ -681,23 +730,51 @@ class _TasksTab extends StatelessWidget {
       builder: (context, snapshot) {
         final bundle = snapshot.data;
         if (bundle == null) return const OmiSpinner();
-        final today = bundle.tasks.where(
-            (task) => task.isOpen && (privacyTaskDueToday(task.dueAt, now) || privacyTaskOverdue(task.dueAt, now)));
-        final inbox = bundle.tasks.where((task) => task.isOpen && task.projectId == null && task.dueAt == null);
+        final today = bundle.tasks
+            .where((task) =>
+                task.isOpen &&
+                (privacyTaskSelectedToday(task, now) ||
+                    privacyTaskDueToday(task.dueAt, now) ||
+                    privacyTaskOverdue(task.dueAt, now)))
+            .toList()
+          ..sort((a, b) => (a.todayRank ?? 1 << 30).compareTo(b.todayRank ?? 1 << 30));
+        final inbox = bundle.tasks.where((task) => task.isOpen && task.projectId == null);
         final completed = bundle.tasks.where((task) => !task.isOpen);
         return ListView(
           padding: const EdgeInsets.all(OmiSpacing.md),
           children: [
             Text(PrivacyCopy.suggestions, style: Theme.of(context).textTheme.titleMedium),
             for (final candidate in bundle.candidates)
-              _CandidateTile(store: store!, candidate: candidate, onChanged: onChanged),
+              _CandidateTile(
+                store: store!,
+                candidate: candidate,
+                onChanged: onChanged,
+                intelligenceClient: intelligenceClient,
+              ),
             Text(PrivacyCopy.today, style: Theme.of(context).textTheme.titleMedium),
             for (final task in today) _TaskTile(store: store!, task: task, now: now, onChanged: onChanged),
             Text(PrivacyCopy.inbox, style: Theme.of(context).textTheme.titleMedium),
             for (final task in inbox) _TaskTile(store: store!, task: task, now: now, onChanged: onChanged),
             Text(PrivacyCopy.projects, style: Theme.of(context).textTheme.titleMedium),
-            for (final project in bundle.projects) _ProjectRow(store: store!, project: project, onChanged: onChanged),
+            for (final project in bundle.projects)
+              _ProjectRow(
+                store: store!,
+                project: project,
+                tasks: bundle.tasks.where((task) => task.projectId == project.projectId).toList(),
+                now: now,
+                onChanged: onChanged,
+              ),
             _ProjectCreator(store: store!, onChanged: onChanged),
+            Text(PrivacyCopy.habits, style: Theme.of(context).textTheme.titleMedium),
+            for (final habit in bundle.habits)
+              _HabitRow(
+                store: store!,
+                habit: habit,
+                completions: bundle.habitCompletions,
+                now: now,
+                onChanged: onChanged,
+              ),
+            _HabitCreator(store: store!, now: now, onChanged: onChanged),
             Text(PrivacyCopy.completedFilter, style: Theme.of(context).textTheme.titleMedium),
             for (final task in completed) _TaskTile(store: store!, task: task, now: now, onChanged: onChanged),
             _ManualTask(store: store!, onChanged: onChanged),
@@ -712,23 +789,39 @@ class _TasksTab extends StatelessWidget {
       tasks: await store.tasks(),
       candidates: await store.pendingCandidates(),
       projects: await store.projects(),
+      habits: await store.habits(),
+      habitCompletions: await store.habitCompletions(),
     );
   }
 }
 
 class _TaskBundle {
-  const _TaskBundle({required this.tasks, required this.candidates, required this.projects});
+  const _TaskBundle({
+    required this.tasks,
+    required this.candidates,
+    required this.projects,
+    required this.habits,
+    required this.habitCompletions,
+  });
   final List<PrivacyTaskRecord> tasks;
   final List<PrivacyCandidateRecord> candidates;
   final List<PrivacyProjectRecord> projects;
+  final List<PrivacyHabitRecord> habits;
+  final List<PrivacyHabitCompletionRecord> habitCompletions;
 }
 
 class _CandidateTile extends StatefulWidget {
-  const _CandidateTile({required this.store, required this.candidate, required this.onChanged});
+  const _CandidateTile({
+    required this.store,
+    required this.candidate,
+    required this.onChanged,
+    required this.intelligenceClient,
+  });
 
   final PrivacyStore store;
   final PrivacyCandidateRecord candidate;
   final Future<void> Function() onChanged;
+  final PrivacyIntelligenceClient? intelligenceClient;
 
   @override
   State<_CandidateTile> createState() => _CandidateTileState();
@@ -736,10 +829,22 @@ class _CandidateTile extends StatefulWidget {
 
 class _CandidateTileState extends State<_CandidateTile> {
   late final TextEditingController _edit = TextEditingController(text: widget.candidate.proposedText);
+  PrivacyIntelligenceClient? _ownedClient;
+  bool _busy = false;
+  String? _status;
+  String? _reconcileOperationId;
+
+  PrivacyIntelligenceClient get _client =>
+      widget.intelligenceClient ??
+      (_ownedClient ??= PrivacyIntelligenceClient(credentials: PrivacyIntelligenceCredentialStore()));
+
+  PrivacyIntelligenceCoordinator get _coordinator =>
+      PrivacyIntelligenceCoordinator(client: _client, store: widget.store);
 
   @override
   void dispose() {
     _edit.dispose();
+    _ownedClient?.close();
     super.dispose();
   }
 
@@ -748,38 +853,205 @@ class _CandidateTileState extends State<_CandidateTile> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(PrivacyCopy.notATask),
+        if ({'task', 'commitment', 'intention'}.contains(widget.candidate.suggestedType))
+          const Text(PrivacyCopy.notATask),
         Text('${PrivacyCopy.suggestionLabel}. ${widget.candidate.extractionVersion}'),
         Text(widget.candidate.proposedText),
         Text(widget.candidate.excerpt),
-        PrivacyButton(
-          label: PrivacyCopy.accept,
-          onPressed: () async {
-            final result = await widget.store.acceptCandidate(widget.candidate.candidateId);
-            if (result.ok) await widget.onChanged();
-          },
-        ),
-        TextField(
-          key: Key('privacy_edit_accept_${widget.candidate.candidateId}'),
-          controller: _edit,
-          decoration: const InputDecoration(labelText: PrivacyCopy.editAccept),
-        ),
-        PrivacyButton.secondary(
-          label: PrivacyCopy.editAccept,
-          onPressed: () async {
-            final result = await widget.store.acceptCandidate(widget.candidate.candidateId, editedTitle: _edit.text);
-            if (result.ok) await widget.onChanged();
-          },
-        ),
+        if (widget.candidate.proposedTimeText != null) Text(widget.candidate.proposedTimeText!),
+        if (widget.candidate.uncertainty != null) Text(PrivacyCopy.uncertainty(widget.candidate.uncertainty!)),
+        if ({'task', 'commitment', 'intention'}.contains(widget.candidate.suggestedType)) ...[
+          PrivacyButton(
+            label: PrivacyCopy.accept,
+            onPressed: () async {
+              final result = await widget.store.acceptCandidate(widget.candidate.candidateId);
+              if (result.ok) await widget.onChanged();
+            },
+          ),
+          TextField(
+            key: Key('privacy_edit_accept_${widget.candidate.candidateId}'),
+            controller: _edit,
+            decoration: const InputDecoration(labelText: PrivacyCopy.editAccept),
+          ),
+          PrivacyButton.secondary(
+            label: PrivacyCopy.editAccept,
+            onPressed: () async {
+              final result = await widget.store.acceptCandidate(
+                widget.candidate.candidateId,
+                editedTitle: _edit.text,
+              );
+              if (result.ok) await widget.onChanged();
+            },
+          ),
+        ],
+        if (widget.candidate.suggestedType == 'habit')
+          PrivacyButton(
+            label: PrivacyCopy.acceptHabit,
+            onPressed: () async {
+              final result = await widget.store.acceptCandidateAsHabit(widget.candidate.candidateId);
+              if (result.ok) await widget.onChanged();
+            },
+          ),
+        if (widget.candidate.suggestedType == 'project')
+          PrivacyButton(
+            label: PrivacyCopy.acceptProject,
+            onPressed: () async {
+              final result = await widget.store.acceptCandidateAsProject(widget.candidate.candidateId);
+              if (result.ok) await widget.onChanged();
+            },
+          ),
+        if (widget.candidate.suggestedType == 'calendar_event') ...[
+          const Text(PrivacyCopy.calendarSuggestionReview),
+          PrivacyButton(
+            key: Key('privacy_review_calendar_${widget.candidate.candidateId}'),
+            label: PrivacyCopy.reviewCalendarSuggestion,
+            onPressed: _busy ? null : _reviewCalendar,
+          ),
+          if (_reconcileOperationId != null)
+            PrivacyButton.secondary(
+              key: Key('privacy_reconcile_candidate_${widget.candidate.candidateId}'),
+              label: PrivacyCopy.reconcileCalendar,
+              onPressed: _busy ? null : _reconcileCalendar,
+            ),
+          if (_busy) const OmiSpinner(),
+          if (_status != null) Text(_status!),
+        ],
         PrivacyButton.secondary(
           label: PrivacyCopy.dismiss,
-          onPressed: () async {
-            final result = await widget.store.dismissCandidate(widget.candidate.candidateId);
-            if (result.ok) await widget.onChanged();
-          },
+          onPressed: _busy
+              ? null
+              : () async {
+                  final result = await widget.store.dismissCandidate(widget.candidate.candidateId);
+                  if (result.ok) await widget.onChanged();
+                },
         ),
       ],
     );
+  }
+
+  Future<void> _reviewCalendar() async {
+    final candidate = widget.candidate;
+    if (candidate.proposedStartAt == null ||
+        candidate.proposedEndAt == null ||
+        (candidate.timezone?.trim().isEmpty ?? true)) {
+      setState(() => _status = PrivacyCopy.incompleteCalendarSuggestion);
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status = null;
+    });
+    try {
+      final calendars = await _client.calendars();
+      if (!mounted) return;
+      final calendar = await _chooseCalendar(calendars);
+      if (!mounted || calendar == null) return;
+      final proposal = _coordinator.calendarProposalForCandidate(
+        candidate: candidate,
+        calendarId: calendar.id,
+      );
+      final preview = await _coordinator.prepare(proposal);
+      if (!mounted) return;
+      final approved = await showOmiConfirm(
+        context,
+        title: PrivacyCopy.reviewCalendarChange,
+        message: _previewMessage(preview),
+        confirmLabel: PrivacyCopy.confirmCalendarChange,
+      );
+      if (!approved || !mounted) return;
+      try {
+        final outcome = await _coordinator.confirmCalendarCandidate(
+          candidateId: candidate.candidateId,
+          approvedPreview: preview,
+        );
+        if (!mounted) return;
+        if (outcome.status == PrivacyIntelligenceOperationStatus.succeeded) {
+          await widget.onChanged();
+          return;
+        }
+        setState(() {
+          _status = outcome.message;
+          _reconcileOperationId = outcome.requiresReconciliation ? outcome.operationId : null;
+        });
+      } on PrivacyIntelligenceClientException {
+        if (!mounted) return;
+        setState(() {
+          _status = PrivacyCopy.calendarUncertain;
+          _reconcileOperationId = preview.operationId;
+        });
+      }
+    } on PrivacyIntelligenceClientException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _status = error.kind == PrivacyIntelligenceFailureKind.notConfigured
+            ? PrivacyCopy.intelligenceNotConfigured
+            : PrivacyCopy.intelligenceUnavailable;
+      });
+    } on ArgumentError {
+      if (mounted) setState(() => _status = PrivacyCopy.incompleteCalendarSuggestion);
+    } catch (_) {
+      if (mounted) setState(() => _status = PrivacyCopy.intelligenceUnavailable);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<PrivacyIntelligenceCalendar?> _chooseCalendar(List<PrivacyIntelligenceCalendar> calendars) async {
+    if (calendars.isEmpty) {
+      setState(() => _status = PrivacyCopy.noCalendars);
+      return null;
+    }
+    if (calendars.length == 1) return calendars.single;
+    return showOmiSheet<PrivacyIntelligenceCalendar>(
+      context: context,
+      title: PrivacyCopy.chooseCalendar,
+      builder: (sheetContext) => ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 400),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final calendar in calendars)
+              PrivacyButton.secondary(
+                label: calendar.name,
+                onPressed: () async => Navigator.of(sheetContext).pop(calendar),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _previewMessage(PrivacyIntelligenceCalendarOperationPreview preview) {
+    final when = OmiDateFormat.of(context).timeRange(preview.startAt.toLocal(), preview.endAt.toLocal());
+    final scope = preview.recurrenceScope == PrivacyIntelligencePreviewRecurrenceScope.series
+        ? PrivacyCopy.entireRecurringSeries
+        : PrivacyCopy.oneNonRecurringEvent;
+    return '${preview.calendarName}\n${preview.title}\n$when\n${preview.timezone}\n$scope\n${preview.changes.join(', ')}';
+  }
+
+  Future<void> _reconcileCalendar() async {
+    final operationId = _reconcileOperationId;
+    if (operationId == null) return;
+    setState(() => _busy = true);
+    try {
+      final outcome = await _coordinator.reconcileCalendarCandidate(
+        candidateId: widget.candidate.candidateId,
+        operationId: operationId,
+      );
+      if (!mounted) return;
+      if (outcome.status == PrivacyIntelligenceOperationStatus.succeeded) {
+        await widget.onChanged();
+        return;
+      }
+      setState(() {
+        _status = outcome.message;
+        _reconcileOperationId = outcome.requiresReconciliation ? operationId : null;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _status = PrivacyCopy.intelligenceUnavailable);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 }
 
@@ -849,6 +1121,18 @@ class _TaskTileState extends State<_TaskTile> {
             if (result.ok) await widget.onChanged();
           },
         ),
+        if (task.isOpen)
+          PrivacyButton.quiet(
+            label: privacyTaskSelectedToday(task, widget.now) ? PrivacyCopy.removeFromToday : PrivacyCopy.addToToday,
+            onPressed: () async {
+              final result = await widget.store.setTaskToday(
+                task.taskId,
+                selected: !privacyTaskSelectedToday(task, widget.now),
+                at: widget.now,
+              );
+              if (result.ok) await widget.onChanged();
+            },
+          ),
         PrivacyButton.quiet(
           label: PrivacyCopy.delete,
           onPressed: () async {
@@ -930,10 +1214,18 @@ class _TaskTileState extends State<_TaskTile> {
 }
 
 class _ProjectRow extends StatefulWidget {
-  const _ProjectRow({required this.store, required this.project, required this.onChanged});
+  const _ProjectRow({
+    required this.store,
+    required this.project,
+    required this.tasks,
+    required this.now,
+    required this.onChanged,
+  });
 
   final PrivacyStore store;
   final PrivacyProjectRecord project;
+  final List<PrivacyTaskRecord> tasks;
+  final DateTime now;
   final Future<void> Function() onChanged;
 
   @override
@@ -956,6 +1248,9 @@ class _ProjectRowState extends State<_ProjectRow> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(project.archived ? '${project.name}. ${PrivacyCopy.archive}' : project.name),
+        Text(PrivacyCopy.projectProgress(widget.tasks.where((task) => !task.isOpen).length, widget.tasks.length)),
+        for (final task in widget.tasks.where((task) => task.isOpen))
+          _TaskTile(store: widget.store, task: task, now: widget.now, onChanged: widget.onChanged),
         if (!project.archived)
           TextField(
             key: Key('privacy_project_rename_${project.projectId}'),
@@ -1068,6 +1363,95 @@ class _ProjectCreatorState extends State<_ProjectCreator> {
   }
 }
 
+class _HabitRow extends StatelessWidget {
+  const _HabitRow({
+    required this.store,
+    required this.habit,
+    required this.completions,
+    required this.now,
+    required this.onChanged,
+  });
+
+  final PrivacyStore store;
+  final PrivacyHabitRecord habit;
+  final List<PrivacyHabitCompletionRecord> completions;
+  final DateTime now;
+  final Future<void> Function() onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final todayKey = privacyDateKey(now);
+    final doneToday = completions.any((item) => item.habitId == habit.habitId && item.dateKey == todayKey);
+    final history = completions.where((item) => item.habitId == habit.habitId).map((item) => item.dateKey).join(', ');
+    return PrivacyCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(habit.title),
+          Text('${PrivacyCopy.recentHistory}: ${history.isEmpty ? PrivacyCopy.none : history}'),
+          PrivacyButton.secondary(
+            label: doneToday ? PrivacyCopy.notDoneToday : PrivacyCopy.doneToday,
+            onPressed: () async {
+              final result = await store.setHabitCompleted(habit.habitId, day: now, completed: !doneToday);
+              if (result.ok) await onChanged();
+            },
+          ),
+          PrivacyButton.quiet(
+            label: PrivacyCopy.archive,
+            onPressed: () async {
+              final result = await store.updateHabit(habit.habitId, archived: true, at: now);
+              if (result.ok) await onChanged();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HabitCreator extends StatefulWidget {
+  const _HabitCreator({required this.store, required this.now, required this.onChanged});
+
+  final PrivacyStore store;
+  final DateTime now;
+  final Future<void> Function() onChanged;
+
+  @override
+  State<_HabitCreator> createState() => _HabitCreatorState();
+}
+
+class _HabitCreatorState extends State<_HabitCreator> {
+  final _title = TextEditingController();
+
+  @override
+  void dispose() {
+    _title.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        TextField(
+          key: const Key('privacy_habit_title'),
+          controller: _title,
+          decoration: const InputDecoration(labelText: PrivacyCopy.habitName),
+        ),
+        PrivacyButton.secondary(
+          label: PrivacyCopy.createHabit,
+          onPressed: () async {
+            final result = await widget.store.createHabit(_title.text, at: widget.now);
+            if (!result.ok || !mounted) return;
+            _title.clear();
+            await widget.onChanged();
+          },
+        ),
+      ],
+    );
+  }
+}
+
 class _SettingsTab extends StatefulWidget {
   const _SettingsTab({
     required this.store,
@@ -1150,6 +1534,7 @@ class _SettingsTabState extends State<_SettingsTab> {
         PrivacyButton(label: PrivacyCopy.save, onPressed: _save),
         PrivacyButton.secondary(label: PrivacyCopy.testConnection, onPressed: _probeConnection),
         if (_probe != null) Text(_probe!),
+        const PrivacyIntelligenceSettings(),
         const PrivacySectionLabel(PrivacyCopy.localData),
         const Text(PrivacyCopy.privacyExplain),
         const Text(PrivacyActionConfig.retentionNote),

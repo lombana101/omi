@@ -42,7 +42,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final themes = MemoryPrivacyThemeStore();
     await tester.pumpWidget(MaterialApp(
-      home: PrivacyShell(themeStore: themes, initialTab: 3, findPendant: () async => PrivacyCopy.notConnected),
+      home: PrivacyShell(themeStore: themes, initialTab: 4, findPendant: () async => PrivacyCopy.notConnected),
     ));
     await tester.pump();
     await tester.tap(find.text(PrivacyCopy.electricBlue));
@@ -51,12 +51,11 @@ void main() {
   });
 
   testWidgets('reduce motion removes the recording glow', (tester) async {
-    await tester.pumpWidget(MediaQuery(
-      data: const MediaQueryData(disableAnimations: true),
+    await tester.pumpWidget(const MediaQuery(
+      data: MediaQueryData(disableAnimations: true),
       child: PrivacyScope(
         theme: signalGreen,
-        child:
-            const MaterialApp(home: PrivacyCaptureOrb(label: 'Recording', kind: 'recording', icon: Icons.graphic_eq)),
+        child: MaterialApp(home: PrivacyCaptureOrb(label: 'Recording', kind: 'recording', icon: Icons.graphic_eq)),
       ),
     ));
     final box = tester.widget<AnimatedContainer>(find.byType(AnimatedContainer));

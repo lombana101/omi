@@ -6,6 +6,7 @@ import 'package:omi/services/privacy_capture/privacy_action_config.dart';
 import 'package:omi/services/privacy_capture/privacy_models.dart';
 import 'package:omi/services/privacy_capture/privacy_redaction.dart';
 import 'package:omi/services/privacy_capture/privacy_suggestion.dart';
+import 'package:uuid/uuid.dart';
 
 class PrivacyStoreUnavailable implements Exception {
   const PrivacyStoreUnavailable();
@@ -250,15 +251,18 @@ class PrivacyStore {
       final now = at ?? DateTime.now();
       for (final chunk in doc.chunks.where((item) => item.sessionId == sessionId)) {
         for (final draft in service.extract(chunk.machineText)) {
+          final fingerprint = _suggestionFingerprint(
+            sourceRef: '$sessionId:${chunk.sequence}',
+            suggestedType: 'task',
+            title: draft.text,
+            proposedTimeText: null,
+          );
           final exists = doc.candidates.any((item) =>
-              item.sessionId == sessionId &&
-              item.sequence == chunk.sequence &&
-              item.proposedText.toLowerCase() == draft.text.toLowerCase());
-          final tomb = doc.candidates.any((item) =>
-              item.tombstone &&
-              item.sessionId == sessionId &&
-              item.sequence == chunk.sequence &&
-              item.proposedText.isEmpty);
+              item.fingerprint == fingerprint ||
+              (item.sessionId == sessionId &&
+                  item.sequence == chunk.sequence &&
+                  item.proposedText.toLowerCase() == draft.text.toLowerCase()));
+          final tomb = doc.candidates.any((item) => item.tombstone && item.fingerprint == fingerprint);
           if (exists || tomb) continue;
           doc.candidates.add(PrivacyCandidateRecord(
             candidateId: _newId(),
@@ -271,12 +275,72 @@ class PrivacyStore {
             extractionVersion: service.version,
             createdAt: now,
             expiresAt: now.add(PrivacyActionConfig.candidateTtl),
+            sourceRef: '$sessionId:${chunk.sequence}',
+            fingerprint: fingerprint,
           ));
           added++;
         }
       }
       return added;
     });
+  }
+
+  Future<PrivacyWriteResult<PrivacyCandidateRecord>> addIntelligenceCandidate({
+    required String sourceRef,
+    required String suggestedType,
+    required String title,
+    required String excerpt,
+    required double uncertainty,
+    String sessionId = '',
+    String captureId = '',
+    int sequence = 0,
+    String? description,
+    String? proposedTimeText,
+    DateTime? proposedStartAt,
+    DateTime? proposedEndAt,
+    String? timezone,
+    DateTime? at,
+  }) async {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty || sourceRef.trim().isEmpty || uncertainty < 0 || uncertainty > 1) {
+      return const PrivacyWriteResult.failed('invalid_candidate');
+    }
+    final fingerprint = _suggestionFingerprint(
+      sourceRef: sourceRef,
+      suggestedType: suggestedType,
+      title: trimmed,
+      proposedTimeText: proposedTimeText,
+    );
+    final created = await _tx((doc) async {
+      final existing = doc.candidates.where((item) => item.fingerprint == fingerprint).toList();
+      if (existing.isNotEmpty) return existing.first;
+      final now = at ?? DateTime.now();
+      final candidate = PrivacyCandidateRecord(
+        candidateId: _newId(),
+        sessionId: sessionId,
+        captureId: captureId,
+        sequence: sequence,
+        proposedText: trimmed,
+        excerpt: boundPrivacyExcerpt(excerpt),
+        extractionKind: 'structured_personal_action',
+        extractionVersion: 'ollama-structured-v1',
+        origin: 'intelligence_suggestion',
+        createdAt: now,
+        expiresAt: now.add(PrivacyActionConfig.candidateTtl),
+        suggestedType: suggestedType,
+        description: description,
+        proposedTimeText: proposedTimeText,
+        proposedStartAt: proposedStartAt,
+        proposedEndAt: proposedEndAt,
+        timezone: timezone,
+        uncertainty: uncertainty,
+        sourceRef: sourceRef,
+        fingerprint: fingerprint,
+      );
+      doc.candidates.add(candidate);
+      return candidate;
+    });
+    return PrivacyWriteResult.ok(created);
   }
 
   Future<List<PrivacyCandidateRecord>> pendingCandidates() async {
@@ -293,6 +357,7 @@ class PrivacyStore {
       final index = doc.candidates.indexWhere((item) => item.candidateId == candidateId && item.status == 'pending');
       if (index < 0) return null;
       final candidate = doc.candidates[index];
+      if (!{'task', 'commitment', 'intention'}.contains(candidate.suggestedType)) return null;
       final title = (editedTitle ?? candidate.proposedText).trim();
       if (title.isEmpty) return null;
       final now = at ?? DateTime.now();
@@ -304,6 +369,8 @@ class PrivacyStore {
         sourceSessionId: candidate.sessionId,
         sourceKind: candidate.origin,
         excerpt: boundPrivacyExcerpt(candidate.excerpt),
+        note: candidate.description,
+        dueAt: candidate.suggestedType == 'task' ? candidate.proposedStartAt : null,
         createdAt: now,
         updatedAt: now,
       );
@@ -321,11 +388,83 @@ class PrivacyStore {
         status: 'accepted',
         createdAt: candidate.createdAt,
         tombstone: true,
+        suggestedType: candidate.suggestedType,
+        timezone: candidate.timezone,
+        uncertainty: candidate.uncertainty,
+        sourceRef: candidate.sourceRef,
+        fingerprint: candidate.fingerprint,
       );
       return created;
     });
     if (task == null) return const PrivacyWriteResult.failed('missing_candidate');
     return PrivacyWriteResult.ok(task);
+  }
+
+  Future<PrivacyWriteResult<PrivacyHabitRecord>> acceptCandidateAsHabit(String candidateId, {DateTime? at}) async {
+    final habit = await _tx((doc) async {
+      final index = doc.candidates.indexWhere(
+        (item) => item.candidateId == candidateId && item.status == 'pending' && item.suggestedType == 'habit',
+      );
+      if (index < 0) return null;
+      final candidate = doc.candidates[index];
+      final now = at ?? DateTime.now();
+      final created = PrivacyHabitRecord(
+        habitId: _newId(),
+        title: candidate.proposedText,
+        createdAt: now,
+        updatedAt: now,
+      );
+      doc.habits.add(created);
+      doc.candidates[index] = _reviewedCandidate(candidate, 'accepted');
+      return created;
+    });
+    if (habit == null) return const PrivacyWriteResult.failed('missing_candidate');
+    return PrivacyWriteResult.ok(habit);
+  }
+
+  Future<PrivacyWriteResult<PrivacyProjectRecord>> acceptCandidateAsProject(String candidateId, {DateTime? at}) async {
+    final project = await _tx((doc) async {
+      final index = doc.candidates.indexWhere(
+        (item) => item.candidateId == candidateId && item.status == 'pending' && item.suggestedType == 'project',
+      );
+      if (index < 0) return null;
+      final candidate = doc.candidates[index];
+      final now = at ?? DateTime.now();
+      final created = PrivacyProjectRecord(
+        projectId: _newId(),
+        name: candidate.proposedText,
+        createdAt: now,
+        updatedAt: now,
+      );
+      doc.projects.add(created);
+      doc.candidates[index] = _reviewedCandidate(candidate, 'accepted');
+      return created;
+    });
+    if (project == null) return const PrivacyWriteResult.failed('missing_candidate');
+    return PrivacyWriteResult.ok(project);
+  }
+
+  /// Records that a reviewed calendar candidate was saved by the provider.
+  ///
+  /// Callers must invoke this only after the Ubuntu API reports a successful
+  /// TimeTree operation. Preparing a preview, cancelling confirmation, a
+  /// failed response, or an uncertain response must leave the candidate
+  /// pending so the owner can reconcile or retry safely.
+  Future<PrivacyWriteResult<void>> markCalendarCandidateSaved(String candidateId) async {
+    final saved = await _tx((doc) async {
+      final index = doc.candidates.indexWhere(
+        (item) =>
+            item.candidateId == candidateId &&
+            item.status == 'pending' &&
+            !item.tombstone &&
+            item.suggestedType == 'calendar_event',
+      );
+      if (index < 0) return false;
+      doc.candidates[index] = _reviewedCandidate(doc.candidates[index], 'accepted');
+      return true;
+    });
+    if (!saved) return const PrivacyWriteResult.failed('missing_calendar_candidate');
+    return const PrivacyWriteResult.ok(null);
   }
 
   Future<PrivacyWriteResult<void>> dismissCandidate(String candidateId) async {
@@ -346,6 +485,11 @@ class PrivacyStore {
         status: 'dismissed',
         createdAt: candidate.createdAt,
         tombstone: true,
+        suggestedType: candidate.suggestedType,
+        timezone: candidate.timezone,
+        uncertainty: candidate.uncertainty,
+        sourceRef: candidate.sourceRef,
+        fingerprint: candidate.fingerprint,
       );
       return true;
     });
@@ -449,6 +593,30 @@ class PrivacyStore {
     return PrivacyWriteResult.ok(updated);
   }
 
+  Future<PrivacyWriteResult<PrivacyTaskRecord>> setTaskToday(
+    String taskId, {
+    required bool selected,
+    required DateTime at,
+  }) async {
+    final updated = await _tx((doc) async {
+      final index = doc.tasks.indexWhere((item) => item.taskId == taskId);
+      if (index < 0) return null;
+      final dateKey = privacyDateKey(at);
+      final maxRank = doc.tasks
+          .where((item) => item.todayDateKey == dateKey && item.todayRank != null)
+          .fold<int>(0, (rank, item) => item.todayRank! > rank ? item.todayRank! : rank);
+      doc.tasks[index] = doc.tasks[index].copyWith(
+        todayDateKey: selected ? dateKey : null,
+        todayRank: selected ? maxRank + 1 : null,
+        clearToday: !selected,
+        updatedAt: at,
+      );
+      return doc.tasks[index];
+    });
+    if (updated == null) return const PrivacyWriteResult.failed('missing_task');
+    return PrivacyWriteResult.ok(updated);
+  }
+
   Future<PrivacyWriteResult<void>> deleteTask(String taskId) async {
     final ok = await _tx((doc) async {
       final before = doc.tasks.length;
@@ -501,6 +669,85 @@ class PrivacyStore {
     });
     if (updated == null) return const PrivacyWriteResult.failed('missing_project');
     return PrivacyWriteResult.ok(updated);
+  }
+
+  Future<PrivacyWriteResult<PrivacyHabitRecord>> createHabit(String title, {DateTime? at}) async {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) return const PrivacyWriteResult.failed('empty_title');
+    final habit = await _tx((doc) async {
+      final now = at ?? DateTime.now();
+      final created = PrivacyHabitRecord(
+        habitId: _newId(),
+        title: trimmed,
+        createdAt: now,
+        updatedAt: now,
+      );
+      doc.habits.add(created);
+      return created;
+    });
+    return PrivacyWriteResult.ok(habit);
+  }
+
+  Future<List<PrivacyHabitRecord>> habits({bool includeArchived = false}) async {
+    final doc = await _read();
+    return doc.habits.where((item) => includeArchived || !item.archived).toList();
+  }
+
+  Future<PrivacyWriteResult<PrivacyHabitRecord>> updateHabit(
+    String habitId, {
+    String? title,
+    bool? archived,
+    DateTime? at,
+  }) async {
+    final updated = await _tx((doc) async {
+      final index = doc.habits.indexWhere((item) => item.habitId == habitId);
+      if (index < 0) return null;
+      final trimmed = title?.trim();
+      if (title != null && (trimmed == null || trimmed.isEmpty)) return null;
+      doc.habits[index] = doc.habits[index].copyWith(
+        title: trimmed,
+        archived: archived,
+        updatedAt: at ?? DateTime.now(),
+      );
+      return doc.habits[index];
+    });
+    if (updated == null) return const PrivacyWriteResult.failed('missing_habit');
+    return PrivacyWriteResult.ok(updated);
+  }
+
+  Future<PrivacyWriteResult<bool>> setHabitCompleted(
+    String habitId, {
+    required DateTime day,
+    required bool completed,
+  }) async {
+    final result = await _tx((doc) async {
+      if (!doc.habits.any((item) => item.habitId == habitId && !item.archived)) return null;
+      final dateKey = privacyDateKey(day);
+      doc.habitCompletions.removeWhere((item) => item.habitId == habitId && item.dateKey == dateKey);
+      if (completed) {
+        doc.habitCompletions.add(
+          PrivacyHabitCompletionRecord(habitId: habitId, dateKey: dateKey, completedAt: day),
+        );
+      }
+      return completed;
+    });
+    if (result == null) return const PrivacyWriteResult.failed('missing_habit');
+    return PrivacyWriteResult.ok(result);
+  }
+
+  Future<List<PrivacyHabitCompletionRecord>> habitCompletions({
+    String? habitId,
+    int recentDays = 14,
+    DateTime? now,
+  }) async {
+    final doc = await _read();
+    final cutoff = (now ?? DateTime.now()).subtract(Duration(days: recentDays));
+    final cutoffKey = privacyDateKey(cutoff);
+    final result = doc.habitCompletions
+        .where((item) => (habitId == null || item.habitId == habitId) && item.dateKey.compareTo(cutoffKey) >= 0)
+        .toList()
+      ..sort((a, b) => b.dateKey.compareTo(a.dateKey));
+    return result;
   }
 
   Future<void> recoverLaunch(DateTime now) async {
@@ -574,6 +821,8 @@ class PrivacyStore {
           deleteAcceptedTasks: true, scope: 'clear_local', at: at ?? DateTime.now(), clearDiagnostics: true);
       doc.projects.clear();
       doc.tasks.clear();
+      doc.habits.clear();
+      doc.habitCompletions.clear();
       return cleared;
     });
     return PrivacyWriteResult.ok(receipt);
@@ -623,10 +872,13 @@ class PrivacyStore {
       throw const FormatException('privacy store');
     }
     final version = decoded['schema_version'];
-    if (version != PrivacyActionConfig.schemaVersion) {
+    if (version is! int ||
+        version < PrivacyActionConfig.oldestReadableSchemaVersion ||
+        version > PrivacyActionConfig.schemaVersion) {
       throw const FormatException('privacy store version');
     }
     _cache = _Doc.fromJson(decoded);
+    _cache!.schemaVersion = PrivacyActionConfig.schemaVersion;
     return _cache!;
   }
 
@@ -683,7 +935,11 @@ class PrivacyStore {
   static bool _validStore(String raw) {
     try {
       final decoded = jsonDecode(raw);
-      return decoded is Map && decoded['schema_version'] == PrivacyActionConfig.schemaVersion;
+      if (decoded is! Map) return false;
+      final version = decoded['schema_version'];
+      return version is int &&
+          version >= PrivacyActionConfig.oldestReadableSchemaVersion &&
+          version <= PrivacyActionConfig.schemaVersion;
     } catch (_) {
       return false;
     }
@@ -811,12 +1067,41 @@ class PrivacyStore {
     }
   }
 
-  static int _id = 0;
-  static String _defaultId() {
-    _id++;
-    final hex = _id.toRadixString(16).padLeft(12, '0');
-    return '00000000-0000-4000-8000-$hex';
-  }
+  static String _defaultId() => const Uuid().v4();
+
+  static String _suggestionFingerprint({
+    required String sourceRef,
+    required String suggestedType,
+    required String title,
+    required String? proposedTimeText,
+  }) =>
+      [
+        sourceRef.trim().toLowerCase(),
+        suggestedType.trim().toLowerCase(),
+        title.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' '),
+        proposedTimeText?.trim().toLowerCase() ?? '',
+      ].join('|');
+
+  static PrivacyCandidateRecord _reviewedCandidate(PrivacyCandidateRecord candidate, String status) =>
+      PrivacyCandidateRecord(
+        candidateId: candidate.candidateId,
+        sessionId: candidate.sessionId,
+        captureId: candidate.captureId,
+        sequence: candidate.sequence,
+        proposedText: '',
+        excerpt: '',
+        extractionKind: candidate.extractionKind,
+        extractionVersion: candidate.extractionVersion,
+        origin: candidate.origin,
+        status: status,
+        createdAt: candidate.createdAt,
+        tombstone: true,
+        suggestedType: candidate.suggestedType,
+        timezone: candidate.timezone,
+        uncertainty: candidate.uncertainty,
+        sourceRef: candidate.sourceRef,
+        fingerprint: candidate.fingerprint,
+      );
 
   static Future<void> _noopProtect(String path) async {}
 }
@@ -831,6 +1116,8 @@ class _Doc {
   List<PrivacyCandidateRecord> candidates = [];
   List<PrivacyTaskRecord> tasks = [];
   List<PrivacyProjectRecord> projects = [];
+  List<PrivacyHabitRecord> habits = [];
+  List<PrivacyHabitCompletionRecord> habitCompletions = [];
   List<PrivacyReceiptRecord> receipts = [];
   List<PrivacyDiagnosticRecord> diagnostics = [];
 
@@ -845,6 +1132,8 @@ class _Doc {
         'candidates': candidates.map((item) => item.toJson()).toList(),
         'tasks': tasks.map((item) => item.toJson()).toList(),
         'projects': projects.map((item) => item.toJson()).toList(),
+        'habits': habits.map((item) => item.toJson()).toList(),
+        'habit_completions': habitCompletions.map((item) => item.toJson()).toList(),
         'receipts': receipts.map((item) => item.toJson()).toList(),
         'diagnostics': diagnostics.map((item) => item.toJson()).toList(),
       };
@@ -860,6 +1149,8 @@ class _Doc {
       ..candidates = _list(json['candidates'], PrivacyCandidateRecord.fromJson)
       ..tasks = _list(json['tasks'], PrivacyTaskRecord.fromJson)
       ..projects = _list(json['projects'], PrivacyProjectRecord.fromJson)
+      ..habits = _list(json['habits'], PrivacyHabitRecord.fromJson)
+      ..habitCompletions = _list(json['habit_completions'], PrivacyHabitCompletionRecord.fromJson)
       ..receipts = _list(json['receipts'], PrivacyReceiptRecord.fromJson)
       ..diagnostics = _list(json['diagnostics'], PrivacyDiagnosticRecord.fromJson);
     return doc;

@@ -247,6 +247,15 @@ class PrivacyCandidateRecord {
     this.status = 'pending',
     this.expiresAt,
     this.tombstone = false,
+    this.suggestedType = 'task',
+    this.description,
+    this.proposedTimeText,
+    this.proposedStartAt,
+    this.proposedEndAt,
+    this.timezone,
+    this.uncertainty,
+    this.sourceRef,
+    this.fingerprint,
   });
 
   final String candidateId;
@@ -262,6 +271,15 @@ class PrivacyCandidateRecord {
   final DateTime createdAt;
   final DateTime? expiresAt;
   final bool tombstone;
+  final String suggestedType;
+  final String? description;
+  final String? proposedTimeText;
+  final DateTime? proposedStartAt;
+  final DateTime? proposedEndAt;
+  final String? timezone;
+  final double? uncertainty;
+  final String? sourceRef;
+  final String? fingerprint;
 
   Map<String, Object?> toJson() => {
         'candidate_id': candidateId,
@@ -277,6 +295,15 @@ class PrivacyCandidateRecord {
         'created_at': createdAt.toUtc().toIso8601String(),
         'expires_at': expiresAt?.toUtc().toIso8601String(),
         'tombstone': tombstone,
+        'suggested_type': suggestedType,
+        'description': tombstone ? null : description,
+        'proposed_time_text': tombstone ? null : proposedTimeText,
+        'proposed_start_at': tombstone ? null : proposedStartAt?.toUtc().toIso8601String(),
+        'proposed_end_at': tombstone ? null : proposedEndAt?.toUtc().toIso8601String(),
+        'timezone': timezone,
+        'uncertainty': uncertainty,
+        'source_ref': sourceRef,
+        'fingerprint': fingerprint,
       };
 
   static PrivacyCandidateRecord fromJson(Map<String, dynamic> json) {
@@ -294,6 +321,15 @@ class PrivacyCandidateRecord {
       createdAt: DateTime.parse(json['created_at'] as String),
       expiresAt: _time(json['expires_at']),
       tombstone: json['tombstone'] as bool? ?? false,
+      suggestedType: json['suggested_type'] as String? ?? 'task',
+      description: json['description'] as String?,
+      proposedTimeText: json['proposed_time_text'] as String?,
+      proposedStartAt: _time(json['proposed_start_at']),
+      proposedEndAt: _time(json['proposed_end_at']),
+      timezone: json['timezone'] as String?,
+      uncertainty: (json['uncertainty'] as num?)?.toDouble(),
+      sourceRef: json['source_ref'] as String?,
+      fingerprint: json['fingerprint'] as String?,
     );
   }
 }
@@ -313,6 +349,8 @@ class PrivacyTaskRecord {
     this.sourceKind,
     this.excerpt,
     this.completedAt,
+    this.todayDateKey,
+    this.todayRank,
   });
 
   final String taskId;
@@ -328,6 +366,8 @@ class PrivacyTaskRecord {
   final DateTime createdAt;
   final DateTime updatedAt;
   final DateTime? completedAt;
+  final String? todayDateKey;
+  final int? todayRank;
 
   bool get isOpen => status == 'open';
 
@@ -348,6 +388,9 @@ class PrivacyTaskRecord {
     DateTime? updatedAt,
     DateTime? completedAt,
     bool clearCompleted = false,
+    String? todayDateKey,
+    int? todayRank,
+    bool clearToday = false,
   }) {
     return PrivacyTaskRecord(
       taskId: taskId,
@@ -363,6 +406,8 @@ class PrivacyTaskRecord {
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       completedAt: clearCompleted ? null : (completedAt ?? this.completedAt),
+      todayDateKey: clearToday ? null : (todayDateKey ?? this.todayDateKey),
+      todayRank: clearToday ? null : (todayRank ?? this.todayRank),
     );
   }
 
@@ -380,6 +425,8 @@ class PrivacyTaskRecord {
         'created_at': createdAt.toUtc().toIso8601String(),
         'updated_at': updatedAt.toUtc().toIso8601String(),
         'completed_at': completedAt?.toUtc().toIso8601String(),
+        'today_date_key': todayDateKey,
+        'today_rank': todayRank,
       };
 
   static PrivacyTaskRecord fromJson(Map<String, dynamic> json) {
@@ -397,8 +444,70 @@ class PrivacyTaskRecord {
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
       completedAt: _time(json['completed_at']),
+      todayDateKey: json['today_date_key'] as String?,
+      todayRank: json['today_rank'] as int?,
     );
   }
+}
+
+class PrivacyHabitRecord {
+  const PrivacyHabitRecord({
+    required this.habitId,
+    required this.title,
+    required this.createdAt,
+    required this.updatedAt,
+    this.archived = false,
+  });
+
+  final String habitId;
+  final String title;
+  final bool archived;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  PrivacyHabitRecord copyWith({String? title, bool? archived, DateTime? updatedAt}) => PrivacyHabitRecord(
+        habitId: habitId,
+        title: title ?? this.title,
+        archived: archived ?? this.archived,
+        createdAt: createdAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
+
+  Map<String, Object?> toJson() => {
+        'habit_id': habitId,
+        'title': title,
+        'archived': archived,
+        'created_at': createdAt.toUtc().toIso8601String(),
+        'updated_at': updatedAt.toUtc().toIso8601String(),
+      };
+
+  static PrivacyHabitRecord fromJson(Map<String, dynamic> json) => PrivacyHabitRecord(
+        habitId: json['habit_id'] as String,
+        title: json['title'] as String,
+        archived: json['archived'] as bool? ?? false,
+        createdAt: DateTime.parse(json['created_at'] as String),
+        updatedAt: DateTime.parse(json['updated_at'] as String),
+      );
+}
+
+class PrivacyHabitCompletionRecord {
+  const PrivacyHabitCompletionRecord({required this.habitId, required this.dateKey, required this.completedAt});
+
+  final String habitId;
+  final String dateKey;
+  final DateTime completedAt;
+
+  Map<String, Object?> toJson() => {
+        'habit_id': habitId,
+        'date_key': dateKey,
+        'completed_at': completedAt.toUtc().toIso8601String(),
+      };
+
+  static PrivacyHabitCompletionRecord fromJson(Map<String, dynamic> json) => PrivacyHabitCompletionRecord(
+        habitId: json['habit_id'] as String,
+        dateKey: json['date_key'] as String,
+        completedAt: DateTime.parse(json['completed_at'] as String),
+      );
 }
 
 class PrivacyProjectRecord {
@@ -576,3 +685,10 @@ bool privacyTaskOverdue(DateTime? due, DateTime now) {
   final start = DateTime(clock.year, clock.month, clock.day);
   return due.toLocal().isBefore(start);
 }
+
+String privacyDateKey(DateTime value) {
+  final local = value.toLocal();
+  return '${local.year.toString().padLeft(4, '0')}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
+}
+
+bool privacyTaskSelectedToday(PrivacyTaskRecord task, DateTime now) => task.todayDateKey == privacyDateKey(now);

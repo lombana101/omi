@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'package:omi/services/devices/transports/device_transport.dart';
+import 'package:omi/services/devices.dart';
 import 'package:omi/services/privacy_capture/privacy_capture_controller.dart';
 import 'package:omi/services/privacy_capture/privacy_capture_io.dart';
 import 'package:omi/gen/pigeon_communicator.g.dart';
@@ -108,10 +109,18 @@ class PrivacyCaptureHost {
     const PrivacyLinkDiagnostics(buttonSubscribed: false, audioSubscribed: false),
   );
   static final _ble = _LatestTransportBle();
+  static final devices = DeviceService();
+  static bool _devicesStarted = false;
   static PrivacyCaptureController? _controller;
   static PrivacyStore? store;
   static Future<void>? _ready;
   static bool get captureInitialized => privacyCaptureEnabled && _controller != null;
+
+  static void startDeviceRuntime() {
+    if (_devicesStarted) return;
+    devices.start();
+    _devicesStarted = true;
+  }
 
   /// Stock builds return before any capture object is created.
   static Future<void> ensureReady() {

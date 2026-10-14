@@ -89,6 +89,8 @@ import 'package:omi/providers/voice_recorder_provider.dart';
 import 'package:omi/providers/phone_call_provider.dart';
 import 'package:omi/services/auth_service.dart';
 import 'package:omi/services/privacy_capture/privacy_capture_feature.dart';
+import 'package:omi/services/privacy_capture/privacy_copy.dart';
+import 'package:omi/services/privacy_capture/privacy_standalone.dart';
 import 'package:omi/ui/omi_theme.dart';
 import 'package:omi/ui/omi_tokens.dart';
 import 'package:omi/services/notifications.dart';
@@ -505,10 +507,16 @@ void main() {
       } else {
         WidgetsFlutterBinding.ensureInitialized();
       }
-      await _start();
+      if (privacyCaptureEnabled) {
+        await _startPrivacyStandalone();
+      } else {
+        await _start();
+      }
     },
     (error, stack) {
-      if (PhysicalQualification.enabled) {
+      if (privacyCaptureEnabled) {
+        debugPrint('Privacy runtime error: ${error.runtimeType}');
+      } else if (PhysicalQualification.enabled) {
         unawaited(PhysicalQualification.runtimeEvent('zone_error', error: error, stack: stack));
       } else {
         _startupErrorRouter.handleZoneError(error, stack);
@@ -519,6 +527,23 @@ void main() {
       }
     },
   );
+}
+
+Future<void> _startPrivacyStandalone() async {
+  // This is intentionally independent from [_init]: privacy mode must not
+  // initialize Firebase, cloud auth, notifications, analytics, WAL upload, the
+  // normal ServiceManager, or public connectivity probes.
+  try {
+    await SharedPreferencesUtil.init();
+    await SharedPreferencesUtil().setCaptureMuted(true);
+    initOpus(await opus_flutter.load());
+    BleFlutterApi.setUp(BleBridge.instance);
+    PrivacyCaptureHost.startDeviceRuntime();
+    await PrivacyCaptureHost.ensureReady();
+  } catch (_) {
+    PrivacyCaptureHost.bootError = PrivacyCopy.storeUnavailable;
+  }
+  runApp(const PrivacyStandaloneApp());
 }
 
 class MyApp extends StatefulWidget {
