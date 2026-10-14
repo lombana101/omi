@@ -368,6 +368,7 @@ and an explicit empty literal renders as `''`.
 | `PARAKEET_DIARIZATION` | Enable prerecorded Parakeet diarization | backend | env | closed | — | — | — | — | keep | — | unowned |
 | `PARAKEET_INFERENCE_MODE` | Choose Parakeet transcription inference backend | backend | env | closed | — | nemo (parakeet (chart)) | nemo (parakeet (chart)) | — | keep | — | unowned |
 | `PARAKEET_USE_V2` | Select Parakeet prerecorded v2 pipeline | backend | env | open | — | — | — | — | keep | — | unowned |
+| `PIS_LLM_ENABLED` | Enable loopback Ollama inference for the standalone Personal Intelligence service; default false | backend | env | closed | — | — | — | — | keep | — | sergiolombana |
 | `RECORDING_SESSION_MODE` | Select recording session migration mode | backend | env | closed | — | — | — | — | keep | — | unowned |
 | `SCREEN_TASK_JEV_AUDIT_RATE` | Screen gate reject audit fraction, default 0.01 | backend | env | open | — | — | — | — | keep | — | dazheng |
 | `SCREEN_TASK_JEV_THRESHOLD` | Screen gate threshold, default 0.5 | backend | env | open | — | — | — | — | keep | — | dazheng |
@@ -389,6 +390,7 @@ and an explicit empty literal renders as `''`.
 | `SYNC_DISPATCH_MODE` | Select sync dispatch lane | backend | env | closed | — | — | — | — | keep | — | unowned |
 | `SYNC_LEDGER_FENCE_MODE` | Select sync ledger fence authority | backend | env | closed | env_var | env_var | env_var | — | keep | — | unowned |
 | `SYNC_PHASE_METRICS_EXPORT_ENABLED` | Export aggregate sync phase histograms through a bounded background flush; default off, enabled by reviewed deploy overlays | backend | env | closed | — | {value: 'true', category: telemetry} | {value: 'true', category: telemetry} | — | keep | — | dazheng |
+| `TIMETREE_INTEGRATION_ENABLED` | Enable the standalone Personal Intelligence TimeTree integration; default false | backend | env | closed | — | — | — | — | keep | — | sergiolombana |
 | `TRANSCRIPTION_FINAL_PASS_BACKEND` | Select pyannote, legacy AHC or contract-compatible Nemotron | backend | env | closed | — | — | — | — | keep | — | dazheng |
 | `TRANSCRIPTION_FINAL_PASS_DIARIZER` | Default-off shared final-pass diarization admission | backend | env | closed | — | — | — | — | keep | — | dazheng |
 | `TYPESENSE_CONVERSATION_INDEX_WRITES` | Write conversations to Typesense index | backend | env | closed | — | — | — | — | keep | — | unowned |
@@ -456,6 +458,7 @@ their code default (`fail` tells you which way a missing value resolves).
 - `PARAKEET_DIARIZATION` — Enable prerecorded Parakeet diarization (fail: closed)
 - `PARAKEET_USE_V2` — Select Parakeet prerecorded v2 pipeline (fail: open)
 - `PINNED_SPEAKER_PRIOR_ENABLED` — Turn near-misses on pinned people into suggestions and record voice candidates for the suggestion card (never loosens auto-labels) (fail: closed)
+- `PIS_LLM_ENABLED` — Enable loopback Ollama inference for the standalone Personal Intelligence service; default false (fail: closed)
 - `RATE_LIMIT_SHADOW_MODE` — Shadow backend rate limits (fail: closed)
 - `RECORDING_SESSION_MODE` — Select recording session migration mode (fail: closed)
 - `SCREEN_ACTIVITY_KEYWORD_FALLBACK_ENABLED` — Fallback to keyword search for screen activity (fail: open)
@@ -475,6 +478,7 @@ their code default (`fail` tells you which way a missing value resolves).
 - `SYNC_BACKFILL_ROUTING_ENABLED` — Route eligible sync work to backfill lane (fail: closed)
 - `SYNC_DISPATCH_MODE` — Select sync dispatch lane (fail: closed)
 - `SYNC_LINEAGE_RESOLVE_ENABLED` — Bind each segment of a recording-id safety-WAL upload to the live rollover generation that owns its audio, and stamp live generations with their origin recording id (default on) (fail: open)
+- `TIMETREE_INTEGRATION_ENABLED` — Enable the standalone Personal Intelligence TimeTree integration; default false (fail: closed)
 - `TRANSCRIPTION_FINAL_PASS_AUTHORITATIVE` — Revision-fenced speaker-only promotion preserving stored text (fail: closed)
 - `TRANSCRIPTION_FINAL_PASS_BACKEND` — Select pyannote, legacy AHC or contract-compatible Nemotron (fail: closed)
 - `TRANSCRIPTION_FINAL_PASS_DIARIZER` — Default-off shared final-pass diarization admission (fail: closed)
