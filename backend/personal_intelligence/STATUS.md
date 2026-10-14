@@ -20,8 +20,9 @@ Ubuntu service or iOS-to-server path is live.
 | Existing Ubuntu context app / `pis-backend` suitability | Keep separate for this release | N/A | On-host read-only audit pending | Existing deployment unknown | No | No verified extension contract or safe noninteractive SSH credential; deployment runbook requires a collision/lifecycle audit |
 
 Backend verification on 2026-10-14: the three dedicated suites completed with
-`78 passed` using the repository Python 3.11 environment. Black 24.4.2 and Ruff
-0.4.4 passed for the package and its tests; bytecode compilation, shell syntax,
+`78 passed` using the repository Python 3.11 environment. The repository-pinned
+Black 26.5.1 formatter and Ruff 0.4.4 passed for the package and its tests;
+bytecode compilation, shell syntax,
 the import-time side-effect scanner, and installed-package compatibility checks
 also passed. These are local and mocked checks only, not Ubuntu deployment or
 provider evidence.
