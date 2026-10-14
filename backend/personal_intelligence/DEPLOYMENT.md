@@ -435,4 +435,3 @@ titles, notes, locations, raw private-API responses, transcript text, or local
 task text. Back up the SQLite file only into owner-approved encrypted storage;
 it contains operation previews and outcomes. A backup or deletion policy must
 be approved separately.
-

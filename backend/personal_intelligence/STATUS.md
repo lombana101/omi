@@ -55,4 +55,3 @@ recorded without private content:
 4. The installed iOS privacy app successfully authenticates to the Ubuntu API
    and receives a real TimeTree read response.
 5. Any live TimeTree write round trip is separately approved before execution.
-
