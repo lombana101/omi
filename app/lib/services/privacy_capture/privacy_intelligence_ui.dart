@@ -31,6 +31,7 @@ class PrivacyAssistantTab extends StatefulWidget {
     required this.onChanged,
     this.client,
     this.timezoneLoader,
+    this.onOpenSwitcher,
   });
 
   final PrivacyStore? store;
@@ -38,6 +39,7 @@ class PrivacyAssistantTab extends StatefulWidget {
   final Future<void> Function() onChanged;
   final PrivacyIntelligenceClient? client;
   final Future<String> Function()? timezoneLoader;
+  final VoidCallback? onOpenSwitcher;
 
   @override
   State<PrivacyAssistantTab> createState() => _PrivacyAssistantTabState();
@@ -68,7 +70,10 @@ class _PrivacyAssistantTabState extends State<PrivacyAssistantTab> {
         PrivacyIntelligenceClient(
           credentials: PrivacyIntelligenceCredentialStore(),
         );
-    unawaited(_refreshCalendar(silent: true));
+    // Standalone widget consumers expect an initial read. The privacy shell
+    // keeps this tab alive offstage, so it defers all network work until the
+    // owner explicitly refreshes or sends a message.
+    if (widget.onOpenSwitcher == null) unawaited(_refreshCalendar(silent: true));
   }
 
   @override
@@ -81,54 +86,99 @@ class _PrivacyAssistantTabState extends State<PrivacyAssistantTab> {
   @override
   Widget build(BuildContext context) {
     final response = _response;
-    return ListView(
-      padding: const EdgeInsets.all(PrivacySpace.md),
+    return Column(
       children: [
-        const PrivacySectionLabel(PrivacyCopy.assistant),
-        TextField(
-          key: const Key('privacy_assistant_message'),
-          controller: _message,
-          minLines: 2,
-          maxLines: 5,
-          decoration: const InputDecoration(labelText: PrivacyCopy.askHint),
-        ),
-        PrivacyButton(
-          key: const Key('privacy_assistant_ask'),
-          label: PrivacyCopy.ask,
-          onPressed: _busy ? null : _ask,
-        ),
-        PrivacyButton.secondary(
-          key: const Key('privacy_extract_manual'),
-          label: PrivacyCopy.extractActions,
-          onPressed: _busy ? null : _extractManual,
-        ),
-        if (_busy) const OmiSpinner(),
-        if (_status != null) Text(_status!, key: const Key('privacy_intelligence_status')),
-        if (response != null) ...[
-          PrivacyCard(child: Text(response.message)),
-          for (final event in response.events) _eventCard(event),
-          if (response.taskSuggestions.isNotEmpty) const Text(PrivacyCopy.pendingSuggestionsSaved),
-          if (response.calendarProposal != null)
-            PrivacyButton(
-              key: const Key('privacy_review_calendar_proposal'),
-              label: PrivacyCopy.reviewCalendarChange,
-              onPressed: _busy ? null : () => _reviewProposal(response.calendarProposal!),
-            ),
-        ],
-        if (_reconcileOperationId != null)
-          PrivacyButton.secondary(
-            key: const Key('privacy_reconcile_calendar'),
-            label: PrivacyCopy.reconcileCalendar,
-            onPressed: _busy ? null : _reconcile,
+        PrivacyPageHeader(
+          title: PrivacyCopy.assistant,
+          subtitle: PrivacyCopy.assistantDescription,
+          onOpenSwitcher: widget.onOpenSwitcher ?? () {},
+          trailing: OmiIconButton.filled(
+            icon: const Icon(Icons.refresh_rounded),
+            label: PrivacyCopy.refreshCalendar,
+            onPressed: _busy ? null : _refreshCalendar,
+            color: PrivacyScope.of(context).palette.text,
+            fillColor: PrivacyScope.of(context).palette.surface,
           ),
-        const PrivacySectionLabel(PrivacyCopy.upcomingEvents),
-        PrivacyButton.secondary(
-          key: const Key('privacy_refresh_calendar'),
-          label: PrivacyCopy.refreshCalendar,
-          onPressed: _busy ? null : _refreshCalendar,
         ),
-        if (_events.isEmpty && !_busy) const Text(PrivacyCopy.noEvents),
-        for (final event in _events) _eventCard(event, editable: true),
+        Expanded(
+          child: ListView(
+            key: const PageStorageKey('privacy_assistant_scroll'),
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.fromLTRB(
+              PrivacySpace.md,
+              PrivacySpace.xs,
+              PrivacySpace.md,
+              PrivacySpace.xxl,
+            ),
+            children: [
+              PrivacyCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(PrivacyCopy.askHint, style: PrivacyScope.of(context).section()),
+                    const SizedBox(height: PrivacySpace.sm),
+                    PrivacyField(
+                      key: const Key('privacy_assistant_message'),
+                      controller: _message,
+                      label: PrivacyCopy.askHint,
+                      minLines: 2,
+                      maxLines: 5,
+                    ),
+                    const SizedBox(height: PrivacySpace.sm),
+                    Wrap(
+                      spacing: PrivacySpace.xs,
+                      runSpacing: PrivacySpace.xs,
+                      children: [
+                        PrivacyButton(
+                          key: const Key('privacy_assistant_ask'),
+                          label: PrivacyCopy.ask,
+                          onPressed: _busy ? null : _ask,
+                        ),
+                        PrivacyButton.secondary(
+                          key: const Key('privacy_extract_manual'),
+                          label: PrivacyCopy.extractActions,
+                          onPressed: _busy ? null : _extractManual,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              if (_busy) const OmiLoadingState(label: PrivacyCopy.working),
+              if (_status != null)
+                PrivacyCard(
+                  tint: PrivacyScope.of(context).palette.surfaceSecondary,
+                  child: Text(_status!, key: const Key('privacy_intelligence_status')),
+                ),
+              if (response != null) ...[
+                PrivacyCard(child: Text(response.message, style: PrivacyScope.of(context).body())),
+                for (final event in response.events) _eventCard(event),
+                if (response.taskSuggestions.isNotEmpty)
+                  const PrivacyCard(child: Text(PrivacyCopy.pendingSuggestionsSaved)),
+                if (response.calendarProposal != null)
+                  PrivacyButton(
+                    key: const Key('privacy_review_calendar_proposal'),
+                    label: PrivacyCopy.reviewCalendarChange,
+                    onPressed: _busy ? null : () => _reviewProposal(response.calendarProposal!),
+                  ),
+              ],
+              if (_reconcileOperationId != null)
+                PrivacyButton.secondary(
+                  key: const Key('privacy_reconcile_calendar'),
+                  label: PrivacyCopy.reconcileCalendar,
+                  onPressed: _busy ? null : _reconcile,
+                ),
+              const PrivacySectionLabel(PrivacyCopy.upcomingEvents),
+              if (_events.isEmpty && !_busy)
+                const OmiEmptyState(
+                  icon: Icons.event_available_outlined,
+                  title: PrivacyCopy.noEvents,
+                  message: 'Your private TimeTree events will appear here after the backend is configured.',
+                ),
+              for (final event in _events) _eventCard(event, editable: true),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -484,32 +534,54 @@ class _PrivacyIntelligenceSettingsState extends State<PrivacyIntelligenceSetting
   Widget build(BuildContext context) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const PrivacySectionLabel(PrivacyCopy.intelligence),
-          TextField(
+          Text(
+            PrivacyCopy.intelligenceSettingsDescription,
+            style: PrivacyScope.of(context).body(),
+          ),
+          const SizedBox(height: PrivacySpace.md),
+          PrivacyField(
             key: const Key('privacy_intelligence_url'),
             controller: _url,
+            label: PrivacyCopy.intelligenceUrl,
             autocorrect: false,
-            decoration: const InputDecoration(labelText: PrivacyCopy.intelligenceUrl),
+            keyboardType: TextInputType.url,
           ),
-          TextField(
+          const SizedBox(height: PrivacySpace.sm),
+          PrivacyField(
             key: const Key('privacy_intelligence_owner'),
             controller: _owner,
+            label: PrivacyCopy.intelligenceOwner,
             autocorrect: false,
-            decoration: const InputDecoration(labelText: PrivacyCopy.intelligenceOwner),
           ),
-          TextField(
+          const SizedBox(height: PrivacySpace.sm),
+          PrivacyField(
             key: const Key('privacy_intelligence_token'),
             controller: _token,
-            obscureText: true,
+            label: PrivacyCopy.intelligenceToken,
+            obscure: true,
             autocorrect: false,
-            decoration: const InputDecoration(labelText: PrivacyCopy.intelligenceToken),
           ),
-          if (_hasToken) const Text(PrivacyCopy.tokenSaved),
-          const Text(PrivacyCopy.tokenBlank),
-          PrivacyButton(label: PrivacyCopy.save, onPressed: _save),
-          PrivacyButton.secondary(label: PrivacyCopy.testConnection, onPressed: _test),
-          PrivacyButton.quiet(label: PrivacyCopy.clearIntelligence, onPressed: _clear),
-          if (_status != null) Text(_status!),
+          const SizedBox(height: PrivacySpace.xs),
+          if (_hasToken) Text(PrivacyCopy.tokenSaved, style: PrivacyScope.of(context).meta()),
+          Text(PrivacyCopy.tokenBlank, style: PrivacyScope.of(context).meta()),
+          if (_status != null) ...[
+            const SizedBox(height: PrivacySpace.sm),
+            PrivacyCard(
+              tint: PrivacyScope.of(context).palette.surfaceSecondary,
+              child: Text(_status!, key: const Key('privacy_intelligence_settings_status')),
+            ),
+          ],
+          const SizedBox(height: PrivacySpace.md),
+          Wrap(
+            spacing: PrivacySpace.xs,
+            runSpacing: PrivacySpace.xs,
+            children: [
+              PrivacyButton(label: PrivacyCopy.save, onPressed: _save),
+              PrivacyButton.secondary(label: PrivacyCopy.testConnection, onPressed: _test),
+            ],
+          ),
+          const SizedBox(height: PrivacySpace.sm),
+          PrivacyButton.destructive(label: PrivacyCopy.clearIntelligence, onPressed: _clear),
         ],
       );
 

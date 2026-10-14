@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:omi/ui/omi_tokens.dart';
+
 enum PrivacyThemeId { signalGreen, electricBlue, warmEmber, quietLight }
 
 class PrivacyPalette {
@@ -91,8 +93,84 @@ class PrivacyTheme {
         onSurface: colors.text,
         error: colors.destructive,
       ),
-      textTheme: base.textTheme.apply(bodyColor: colors.text, displayColor: colors.text),
+      textTheme: base.textTheme.apply(
+        fontFamily: 'SF Pro Display',
+        bodyColor: colors.text,
+        displayColor: colors.text,
+      ),
       dividerColor: colors.border,
+      disabledColor: colors.disabled,
+      focusColor: colors.focus,
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: colors.surfaceSecondary,
+        contentPadding: const EdgeInsets.symmetric(horizontal: PrivacySpace.md, vertical: PrivacySpace.md),
+        labelStyle: TextStyle(color: colors.textSecondary),
+        hintStyle: TextStyle(color: colors.textSecondary),
+        helperStyle: TextStyle(color: colors.textSecondary),
+        errorStyle: TextStyle(color: colors.destructive),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(PrivacyRadius.control),
+          borderSide: BorderSide(color: colors.border),
+        ),
+        disabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(PrivacyRadius.control),
+          borderSide: BorderSide(color: colors.disabled),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(PrivacyRadius.control),
+          borderSide: BorderSide(color: colors.focus, width: 2),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(PrivacyRadius.control),
+          borderSide: BorderSide(color: colors.destructive),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(PrivacyRadius.control),
+          borderSide: BorderSide(color: colors.destructive, width: 2),
+        ),
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: colors.surface,
+        modalBackgroundColor: colors.surface,
+        modalBarrierColor: colors.background.withValues(alpha: 0.72),
+        dragHandleColor: colors.textSecondary,
+      ),
+      dialogTheme: DialogThemeData(backgroundColor: colors.surface),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: colors.surfaceSecondary,
+        contentTextStyle: TextStyle(color: colors.text),
+      ),
+    );
+  }
+
+  /// Lets shared Omi controls participate in the privacy app's four palettes.
+  /// The privacy flavor is a standalone root, so updating the active token set
+  /// here cannot leak into the stock signed-in experience.
+  OmiPalette toOmiPalette() {
+    final colors = palette;
+    return OmiPalette(
+      surface0: colors.background,
+      surface1: colors.surface,
+      surface2: colors.surfaceSecondary,
+      surface3: colors.border,
+      chipSurface: colors.surfaceSecondary,
+      messageSurface: colors.surface,
+      categorySurface: colors.surfaceSecondary,
+      conversationCard: colors.surface,
+      sourceBadgeSurface: colors.surfaceSecondary,
+      border: colors.border,
+      textPrimary: colors.text,
+      textSecondary: colors.textSecondary,
+      textTertiary: colors.textSecondary,
+      textDisabled: colors.disabled,
+      accent: colors.accent,
+      onAccent: colors.onAccent,
+      success: colors.success,
+      successSurface: colorsWithOpacity(colors.success),
+      warning: colors.warning,
+      danger: colors.destructive,
+      dangerSurface: colorsWithOpacity(colors.destructive),
     );
   }
 
@@ -142,6 +220,8 @@ class PrivacyTheme {
     }
   }
 }
+
+Color colorsWithOpacity(Color color) => color.withValues(alpha: 0.15);
 
 // omi-ux-allow: color-literal -- privacy theme tokens, not ad-hoc widget colors
 const signalGreen = PrivacyTheme(
@@ -231,17 +311,17 @@ const quietLight = PrivacyTheme(
     surfaceSecondary: Color(0xFFE7EFE6), // omi-ux-allow: color-literal -- privacy theme token
     text: Color(0xFF1C241C), // omi-ux-allow: color-literal -- privacy theme token
     textSecondary: Color(0xFF5C6A5E), // omi-ux-allow: color-literal -- privacy theme token
-    accent: Color(0xFF1F8A4C), // omi-ux-allow: color-literal -- privacy theme token
+    accent: Color(0xFF176F3B), // omi-ux-allow: color-literal -- privacy theme token
     onAccent: Color(0xFFF7FFF9), // omi-ux-allow: color-literal -- privacy theme token
     border: Color(0xFFD5DDD4), // omi-ux-allow: color-literal -- privacy theme token
-    success: Color(0xFF1F8A4C), // omi-ux-allow: color-literal -- privacy theme token
+    success: Color(0xFF176F3B), // omi-ux-allow: color-literal -- privacy theme token
     warning: Color(0xFF9A6A12), // omi-ux-allow: color-literal -- privacy theme token
     destructive: Color(0xFFB42318), // omi-ux-allow: color-literal -- privacy theme token
     disabled: Color(0xFF8A938A), // omi-ux-allow: color-literal -- privacy theme token
-    focus: Color(0xFF146636), // omi-ux-allow: color-literal -- privacy theme token
-    recording: Color(0xFF1F8A4C), // omi-ux-allow: color-literal -- privacy theme token
+    focus: Color(0xFF125E32), // omi-ux-allow: color-literal -- privacy theme token
+    recording: Color(0xFF176F3B), // omi-ux-allow: color-literal -- privacy theme token
     interrupted: Color(0xFF9A6A12), // omi-ux-allow: color-literal -- privacy theme token
-    suggestion: Color(0xFF1F8A4C), // omi-ux-allow: color-literal -- privacy theme token
+    suggestion: Color(0xFF176F3B), // omi-ux-allow: color-literal -- privacy theme token
     machine: Color(0xFF3E4C40), // omi-ux-allow: color-literal -- privacy theme token
     owner: Color(0xFF1C241C), // omi-ux-allow: color-literal -- privacy theme token
   ),

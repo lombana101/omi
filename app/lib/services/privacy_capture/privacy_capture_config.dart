@@ -24,6 +24,9 @@ class PrivacyCaptureConfig {
   static const allowedConsentBases = <String>{'self_only', 'participants_consented'};
   static const defaultPurpose = 'personal_memory';
   static const defaultConsentBasis = 'self_only';
+  static const quickGestureConsentBasis = 'self_only_quick_gesture';
+  static const phoneManualCaptureOrigin = 'phone_manual_capture';
+  static const pendantQuickCaptureOrigin = 'pendant_quick_capture';
   static const ackType = 'StartCaptureAck';
   static const startType = 'StartCapture';
   static const closeType = 'CloseStream';

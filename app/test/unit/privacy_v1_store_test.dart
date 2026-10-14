@@ -4,7 +4,9 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/services/privacy_capture/privacy_action_config.dart';
 import 'package:omi/services/privacy_capture/privacy_capture_feature.dart';
+import 'package:omi/services/privacy_capture/privacy_capture_config.dart';
 import 'package:omi/services/privacy_capture/privacy_models.dart';
+import 'package:omi/services/privacy_capture/privacy_quick_capture.dart';
 import 'package:omi/services/privacy_capture/privacy_redaction.dart';
 import 'package:omi/services/privacy_capture/privacy_standalone.dart';
 import 'package:omi/services/privacy_capture/privacy_store.dart';
@@ -200,6 +202,129 @@ void main() {
     expect(cleared.value!.remoteResult, contains('unavailable'));
     expect(await nextLaunch.sessions(), isEmpty);
     expect(jsonEncode(cleared.value!.toJson()).contains('Bearer'), isFalse);
+  });
+
+  test('quick-session provenance and fixed retention persist across restart', () async {
+    final dir = await Directory.systemTemp.createTemp('privacy-quick-provenance');
+    final store = await PrivacyStore.open(dir);
+    await store.setRetention(PrivacyRetentionChoice.untilDeleted);
+    final assertedAt = DateTime.utc(2026, 10, 10, 12, 0, 1);
+
+    final opened = await store.openSession(
+      captureId: '77777777-7777-4777-8777-777777777777',
+      purpose: PrivacyCaptureConfig.defaultPurpose,
+      ownerPurpose: QuickSelfCapturePurpose.taskCapture.provenanceValue,
+      consentBasis: PrivacyCaptureConfig.quickGestureConsentBasis,
+      wireConsentBasis: PrivacyCaptureConfig.defaultConsentBasis,
+      consentAssertedAt: assertedAt,
+      configuredPurpose: QuickSelfCapturePurpose.taskCapture.provenanceValue,
+      captureOrigin: PrivacyCaptureConfig.pendantQuickCaptureOrigin,
+      retentionChoice: PrivacyRetentionChoice.days7,
+      protocolVersion: 1,
+      policyRevision: 1,
+      at: DateTime.utc(2026, 10, 10, 12, 0, 2),
+    );
+    expect(opened.ok, isTrue);
+    await store.markTerminal(
+      captureId: opened.value!.captureId,
+      outcome: 'no_speech',
+      incomplete: false,
+      at: DateTime.utc(2026, 10, 10, 12, 1),
+    );
+
+    final reopened = await PrivacyStore.open(dir);
+    final session = (await reopened.sessions()).single;
+    expect(session.purpose, PrivacyCaptureConfig.defaultPurpose);
+    expect(session.consentBasis, PrivacyCaptureConfig.quickGestureConsentBasis);
+    expect(session.wireConsentBasis, PrivacyCaptureConfig.defaultConsentBasis);
+    expect(session.consentAssertedAt, assertedAt);
+    expect(session.configuredPurpose, 'task_capture');
+    expect(session.captureOrigin, PrivacyCaptureConfig.pendantQuickCaptureOrigin);
+    expect(session.retentionChoice, PrivacyRetentionChoice.days7.name);
+    expect(session.expiresAt, DateTime.utc(2026, 10, 17, 12, 1));
+
+    final raw = await File('${dir.path}/store.json').readAsString();
+    expect(raw, contains('"consent_basis":"self_only_quick_gesture"'));
+    expect(raw, contains('"wire_consent_basis":"self_only"'));
+    expect(raw, contains('"capture_origin":"pendant_quick_capture"'));
+  });
+
+  test('cold-launch ID collisions mint a different task ID', () async {
+    final dir = await Directory.systemTemp.createTemp('privacy-task-id-restart');
+    const repeatedId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+    final firstLaunch = await PrivacyStore.open(dir, newId: () => repeatedId);
+    final first = await firstLaunch.createTask(title: 'First task');
+    expect(first.ok, isTrue);
+    expect(first.value!.taskId, repeatedId);
+
+    // Simulate a fresh process whose ID source starts from the same value.
+    final secondLaunch = await PrivacyStore.open(dir, newId: () => repeatedId);
+    final second = await secondLaunch.createTask(title: 'Second task');
+    expect(second.ok, isTrue);
+    expect(second.value!.taskId, isNot(repeatedId));
+
+    final tasks = await secondLaunch.tasks();
+    expect(tasks.map((task) => task.taskId).toSet(), hasLength(2));
+    expect(tasks.map((task) => task.title), containsAll(<String>['First task', 'Second task']));
+  });
+
+  test('opening a legacy store repairs and persists duplicate task IDs', () async {
+    final dir = await Directory.systemTemp.createTemp('privacy-task-id-repair');
+    final file = File('${dir.path}/store.json');
+    final store = await PrivacyStore.open(dir);
+    final first = await store.createTask(title: 'Keep first identity');
+    await store.createTask(title: 'Repair second identity');
+
+    final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    final taskRows = json['tasks'] as List<dynamic>;
+    (taskRows[1] as Map<String, dynamic>)['task_id'] = first.value!.taskId;
+    await file.writeAsString(jsonEncode(json), flush: true);
+
+    const repairedId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    final repaired = await PrivacyStore.open(dir, newId: () => repairedId);
+    final tasks = await repaired.tasks();
+    expect(tasks, hasLength(2));
+    expect(tasks[0].title, 'Keep first identity');
+    expect(tasks[0].taskId, first.value!.taskId);
+    expect(tasks[1].title, 'Repair second identity');
+    expect(tasks[1].taskId, repairedId);
+    expect(tasks.map((task) => task.taskId).toSet(), hasLength(2));
+
+    final persisted = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    final persistedRows = persisted['tasks'] as List<dynamic>;
+    expect(
+      persistedRows.map((row) => (row as Map<String, dynamic>)['task_id']).toSet(),
+      hasLength(2),
+    );
+  });
+
+  test('task completion changes only the task with the requested ID', () async {
+    final dir = await Directory.systemTemp.createTemp('privacy-task-exact-completion');
+    final ids = <String>[
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    ];
+    final store = await PrivacyStore.open(dir, newId: () => ids.removeAt(0));
+    final first = await store.createTask(title: 'Leave open');
+    final second = await store.createTask(title: 'Complete this');
+    final completedAt = DateTime.utc(2026, 10, 11, 15, 30);
+
+    final result = await store.setTaskStatus(
+      second.value!.taskId,
+      completed: true,
+      at: completedAt,
+    );
+    expect(result.ok, isTrue);
+    expect(result.value!.taskId, second.value!.taskId);
+
+    final tasksById = <String, PrivacyTaskRecord>{
+      for (final task in await store.tasks()) task.taskId: task,
+    };
+    expect(tasksById[first.value!.taskId]!.status, 'open');
+    expect(tasksById[first.value!.taskId]!.completedAt, isNull);
+    expect(tasksById[second.value!.taskId]!.status, 'completed');
+    expect(tasksById[second.value!.taskId]!.completedAt, completedAt);
   });
 
   test('protection failure and a bad replacement do not destroy the last valid store', () async {

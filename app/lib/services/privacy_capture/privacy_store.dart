@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:uuid/uuid.dart';
+
 import 'package:omi/services/privacy_capture/privacy_action_config.dart';
+import 'package:omi/services/privacy_capture/privacy_capture_config.dart';
 import 'package:omi/services/privacy_capture/privacy_models.dart';
 import 'package:omi/services/privacy_capture/privacy_redaction.dart';
 import 'package:omi/services/privacy_capture/privacy_suggestion.dart';
-import 'package:uuid/uuid.dart';
 
 class PrivacyStoreUnavailable implements Exception {
   const PrivacyStoreUnavailable();
@@ -32,6 +34,7 @@ class PrivacyStore {
     if (protect != null) {
       try {
         await protect(directory.path);
+        if (await file.exists()) await protect(file.path);
       } catch (_) {
         throw const PrivacyStoreUnavailable();
       }
@@ -40,6 +43,7 @@ class PrivacyStore {
     final store = PrivacyStore._(file, newId ?? _defaultId, protect ?? _noopProtect);
     try {
       await store._tx((doc) async {
+        store._repairDuplicateTaskIds(doc);
         doc.diagnostics.add(PrivacyDiagnosticRecord(at: (now ?? DateTime.now)(), kind: 'store_open', state: 'off'));
         _trimDiagnostics(doc);
         return null;
@@ -76,6 +80,11 @@ class PrivacyStore {
     required String purpose,
     required String ownerPurpose,
     required String consentBasis,
+    String? wireConsentBasis,
+    DateTime? consentAssertedAt,
+    String? configuredPurpose,
+    String captureOrigin = PrivacyCaptureConfig.phoneManualCaptureOrigin,
+    PrivacyRetentionChoice? retentionChoice,
     required int protocolVersion,
     required int policyRevision,
     required DateTime at,
@@ -90,12 +99,15 @@ class PrivacyStore {
         purpose: purpose,
         ownerPurpose: ownerPurpose,
         consentBasis: consentBasis,
-        consentAssertedAt: at,
+        wireConsentBasis: wireConsentBasis,
+        consentAssertedAt: consentAssertedAt ?? at,
+        configuredPurpose: configuredPurpose,
+        captureOrigin: captureOrigin,
         protocolVersion: protocolVersion,
         policyRevision: policyRevision,
         outcome: 'authorizing',
         incomplete: true,
-        retentionChoice: doc.retention,
+        retentionChoice: retentionChoice?.name ?? doc.retention,
       );
       doc.sessions.add(session);
       return session;
@@ -362,7 +374,7 @@ class PrivacyStore {
       if (title.isEmpty) return null;
       final now = at ?? DateTime.now();
       final created = PrivacyTaskRecord(
-        taskId: _newId(),
+        taskId: _nextTaskId(doc),
         title: title,
         status: 'open',
         creationOrigin: 'accepted_candidate',
@@ -516,7 +528,7 @@ class PrivacyStore {
       }
       final now = at ?? DateTime.now();
       final created = PrivacyTaskRecord(
-        taskId: _newId(),
+        taskId: _nextTaskId(doc),
         title: trimmed,
         note: note?.trim().isEmpty ?? true ? null : note!.trim(),
         status: 'open',
@@ -553,7 +565,7 @@ class PrivacyStore {
     DateTime? at,
   }) async {
     final updated = await _tx((doc) async {
-      final index = doc.tasks.indexWhere((item) => item.taskId == taskId);
+      final index = _uniqueTaskIndex(doc, taskId);
       if (index < 0) return null;
       if (projectId != null && !doc.projects.any((item) => item.projectId == projectId && !item.archived)) return null;
       final next = doc.tasks[index].copyWith(
@@ -577,7 +589,7 @@ class PrivacyStore {
   Future<PrivacyWriteResult<PrivacyTaskRecord>> setTaskStatus(String taskId,
       {required bool completed, DateTime? at}) async {
     final updated = await _tx((doc) async {
-      final index = doc.tasks.indexWhere((item) => item.taskId == taskId);
+      final index = _uniqueTaskIndex(doc, taskId);
       if (index < 0) return null;
       final now = at ?? DateTime.now();
       final next = doc.tasks[index].copyWith(
@@ -619,9 +631,10 @@ class PrivacyStore {
 
   Future<PrivacyWriteResult<void>> deleteTask(String taskId) async {
     final ok = await _tx((doc) async {
-      final before = doc.tasks.length;
-      doc.tasks.removeWhere((item) => item.taskId == taskId);
-      return doc.tasks.length != before;
+      final index = _uniqueTaskIndex(doc, taskId);
+      if (index < 0) return false;
+      doc.tasks.removeAt(index);
+      return true;
     });
     if (!ok) return const PrivacyWriteResult.failed('missing_task');
     return const PrivacyWriteResult.ok(null);
@@ -1067,8 +1080,6 @@ class PrivacyStore {
     }
   }
 
-  static String _defaultId() => const Uuid().v4();
-
   static String _suggestionFingerprint({
     required String sourceRef,
     required String suggestedType,
@@ -1102,6 +1113,45 @@ class PrivacyStore {
         sourceRef: candidate.sourceRef,
         fingerprint: candidate.fingerprint,
       );
+
+  String _nextTaskId(_Doc doc, {Set<String> reserved = const <String>{}}) {
+    for (var attempt = 0; attempt < 16; attempt++) {
+      final candidate = _newId().trim();
+      if (candidate.isNotEmpty && !reserved.contains(candidate) && !doc.tasks.any((task) => task.taskId == candidate)) {
+        return candidate;
+      }
+    }
+    for (var attempt = 0; attempt < 16; attempt++) {
+      final candidate = const Uuid().v4();
+      if (!reserved.contains(candidate) && !doc.tasks.any((task) => task.taskId == candidate)) {
+        return candidate;
+      }
+    }
+    throw const PrivacyStoreUnavailable();
+  }
+
+  void _repairDuplicateTaskIds(_Doc doc) {
+    final seen = <String>{};
+    for (var index = 0; index < doc.tasks.length; index++) {
+      final task = doc.tasks[index];
+      if (task.taskId.isNotEmpty && seen.add(task.taskId)) continue;
+      final replacement = _nextTaskId(doc, reserved: seen);
+      doc.tasks[index] = task.copyWith(taskId: replacement);
+      seen.add(replacement);
+    }
+  }
+
+  static int _uniqueTaskIndex(_Doc doc, String taskId) {
+    var found = -1;
+    for (var index = 0; index < doc.tasks.length; index++) {
+      if (doc.tasks[index].taskId != taskId) continue;
+      if (found >= 0) return -1;
+      found = index;
+    }
+    return found;
+  }
+
+  static String _defaultId() => const Uuid().v4();
 
   static Future<void> _noopProtect(String path) async {}
 }

@@ -120,9 +120,52 @@ void main() {
     await _until(() => duplicate.controller.state == PrivacyCaptureState.error);
     expect(duplicate.controller.state, PrivacyCaptureState.error);
   });
+
+  test('iOS privacy journal remains protected and writable after first unlock', () async {
+    final appDelegate = await _appFile('ios/Runner/AppDelegate.swift').readAsString();
+    final channelStart = appDelegate.indexOf('let privacyFiles = FlutterMethodChannel');
+    final channelEnd = appDelegate.indexOf('// Audio session configuration', channelStart);
+    expect(channelStart, greaterThanOrEqualTo(0));
+    expect(channelEnd, greaterThan(channelStart));
+
+    final privacyFileBridge = appDelegate.substring(channelStart, channelEnd);
+    expect(
+      privacyFileBridge,
+      contains('FileProtectionType.completeUntilFirstUserAuthentication'),
+    );
+    expect(
+      privacyFileBridge,
+      isNot(contains('[.protectionKey: FileProtectionType.complete],')),
+    );
+    expect(
+      privacyFileBridge,
+      contains('protection == .completeUntilFirstUserAuthentication'),
+    );
+    expect(privacyFileBridge, contains('readBack.isExcludedFromBackup == true'));
+  });
+
+  test('privacy pendant selection is persisted, re-armed, and receives distinct haptics', () async {
+    final shell = await _appFile('lib/services/privacy_capture/privacy_shell.dart').readAsString();
+    expect(shell, contains('SharedPreferencesUtil().btDeviceSet(device)'));
+    expect(shell, contains('.ensureConnection(saved.id, force: true)'));
+    expect(shell, contains('deviceId: saved.id'));
+
+    final feature = await _appFile('lib/services/privacy_capture/privacy_capture_feature.dart').readAsString();
+    expect(feature, contains('PrivacyHaptic.start => 2'));
+    expect(feature, contains('PrivacyHaptic.stop => 1'));
+    expect(feature, contains('PrivacyHaptic.error => 3'));
+    expect(feature, contains('speakerDataStreamCharacteristicUuid'));
+
+    final io = await _appFile('lib/services/privacy_capture/privacy_capture_io.dart').readAsString();
+    expect(io, contains('channel.ready.timeout(const Duration(seconds: 6))'));
+  });
 }
 
-Future<void> _pump() => Future<void>.delayed(Duration.zero);
+File _appFile(String relativePath) {
+  final fromApp = File(relativePath);
+  if (fromApp.existsSync()) return fromApp;
+  return File('app/$relativePath');
+}
 
 Future<void> _until(bool Function() ready) async {
   final deadline = DateTime.now().add(const Duration(seconds: 2));

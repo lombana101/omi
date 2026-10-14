@@ -4,7 +4,9 @@ import 'dart:convert';
 import 'package:uuid/uuid.dart';
 
 import 'package:omi/services/privacy_capture/privacy_capture_config.dart';
+import 'package:omi/services/privacy_capture/privacy_models.dart';
 import 'package:omi/services/privacy_capture/privacy_pcm16.dart';
+import 'package:omi/services/privacy_capture/privacy_quick_capture.dart';
 
 enum PrivacyCaptureState { off, authorizing, recording, finalizing, error }
 
@@ -80,6 +82,11 @@ abstract class PrivacyCaptureJournal {
     required String purpose,
     required String ownerPurpose,
     required String consentBasis,
+    required String wireConsentBasis,
+    required DateTime consentAssertedAt,
+    String? configuredPurpose,
+    required String captureOrigin,
+    PrivacyRetentionChoice? retentionChoice,
     required DateTime at,
     required int protocolVersion,
     required int policyRevision,
@@ -187,6 +194,10 @@ class PrivacyCaptureController {
 
   PrivacyCaptureState state = PrivacyCaptureState.off;
   String consentBasis = PrivacyCaptureConfig.defaultConsentBasis;
+  String wireConsentBasis = PrivacyCaptureConfig.defaultConsentBasis;
+  String captureOrigin = PrivacyCaptureConfig.phoneManualCaptureOrigin;
+  String? configuredPurpose;
+  PrivacyRetentionChoice? retentionChoice;
   bool participantsConsentArmed = false;
   String? activeCaptureId;
   String? lastStartCaptureJson;
@@ -200,6 +211,10 @@ class PrivacyCaptureController {
   bool _tapGate = false;
   bool _startGate = false;
   bool _ending = false;
+  bool _foreground = true;
+  int? _backgroundQuickCaptureGeneration;
+  DateTime? _pendingConsentAssertedAt;
+  QuickSelfCaptureIntent? _pendingQuickCapture;
   final transcripts = <PrivacyTranscript>[];
   List<String> get localTranscripts => transcripts.map((item) => item.text).toList();
   final traces = <PrivacyCaptureTrace>[];
@@ -226,7 +241,32 @@ class PrivacyCaptureController {
   PrivacySocketSession? _session;
 
   /// Fresh process. Does not resume a previous capture.
-  Future<void> onAppStart() => _forceOff(haptic: null, next: PrivacyCaptureState.off);
+  Future<void> onAppStart() async {
+    _foreground = true;
+    await _forceOff(haptic: null, next: PrivacyCaptureState.off);
+  }
+
+  bool get _backgroundQuickCaptureActive =>
+      _backgroundQuickCaptureGeneration == _generation &&
+      (_startGate ||
+          state == PrivacyCaptureState.authorizing ||
+          state == PrivacyCaptureState.recording ||
+          state == PrivacyCaptureState.finalizing);
+
+  /// Returning to the foreground never revives a prior authorization or audio
+  /// subscription. A pendant capture that was admitted while backgrounded is
+  /// already the same live generation, so foregrounding must not stop it.
+  Future<void> onForeground() async {
+    _foreground = true;
+    if (_backgroundQuickCaptureActive) return;
+    if (state == PrivacyCaptureState.recording ||
+        state == PrivacyCaptureState.authorizing ||
+        state == PrivacyCaptureState.finalizing) {
+      await _interrupt(_generation);
+      return;
+    }
+    await _forceOff(haptic: null, next: PrivacyCaptureState.off);
+  }
 
   /// Radio returned. An in-progress capture is interrupted. Audio must not resume.
   Future<void> onReconnect() async {
@@ -245,18 +285,31 @@ class PrivacyCaptureController {
   /// unless this is called again.
   void armParticipantsConsented({required bool consentObtained}) {
     participantsConsentArmed = consentObtained;
-    if (consentObtained) selfOnlyAsserted = false;
+    if (consentObtained) {
+      selfOnlyAsserted = false;
+      _pendingConsentAssertedAt = _now();
+    }
   }
 
   /// Owner assertion that nobody else is being recorded. Not a technical determination.
   void assertSelfOnly() {
     selfOnlyAsserted = true;
     participantsConsentArmed = false;
+    _pendingConsentAssertedAt = _now();
   }
 
-  /// Background and lock cannot be proven safe. Stop admission and do not resume.
+  /// Any capture admitted in the foreground stops when the app leaves it. A
+  /// pendant capture admitted while already backgrounded survives duplicate
+  /// background notifications for that lifecycle transition only. If it is
+  /// foregrounded and later backgrounded again, it is interrupted normally.
   Future<void> onBackground() async {
-    if (state == PrivacyCaptureState.off || state == PrivacyCaptureState.error) return;
+    final repeatedBackgroundNotification = !_foreground;
+    _foreground = false;
+    if (repeatedBackgroundNotification && _backgroundQuickCaptureActive) return;
+    if (state == PrivacyCaptureState.off || state == PrivacyCaptureState.error) {
+      await _forceOff(haptic: null, next: PrivacyCaptureState.off);
+      return;
+    }
     if (state == PrivacyCaptureState.authorizing) {
       await _fail(_generation);
       return;
@@ -264,14 +317,28 @@ class PrivacyCaptureController {
     await _interrupt(_generation);
   }
 
-  /// Pendant double-tap. Starts or stops; it never changes consent basis.
-  Future<void> onDoubleTap() async {
-    if (_tapGate || state == PrivacyCaptureState.finalizing) return;
+  /// Pendant double-tap. A quick intent is an assertion for this start gesture
+  /// only. Without one, privacy builds reject pendant starts even if the phone
+  /// flow has a mixed-party assertion armed.
+  Future<void> onDoubleTap({QuickSelfCaptureIntent? quickCapture}) async {
+    if (_tapGate || state == PrivacyCaptureState.authorizing || state == PrivacyCaptureState.finalizing) {
+      return;
+    }
     _tapGate = true;
     try {
-      if (state == PrivacyCaptureState.recording || state == PrivacyCaptureState.authorizing) {
+      if (state == PrivacyCaptureState.recording) {
         await stop();
         return;
+      }
+      if ((!_foreground && quickCapture == null) || (quickCapture == null && requireConsentAssertion)) {
+        await _forceOff(haptic: PrivacyHaptic.error, next: PrivacyCaptureState.off);
+        return;
+      }
+      if (quickCapture != null) {
+        _pendingQuickCapture = quickCapture;
+        participantsConsentArmed = false;
+        selfOnlyAsserted = false;
+        _pendingConsentAssertedAt = null;
       }
       await start();
     } finally {
@@ -288,16 +355,23 @@ class PrivacyCaptureController {
     }
     _startGate = true;
     final generation = ++_generation;
+    final quickCapture = _pendingQuickCapture;
+    _pendingQuickCapture = null;
+    _backgroundQuickCaptureGeneration = !_foreground && quickCapture != null ? generation : null;
     try {
       await _closeAudio();
       final previous = _session;
       _session = null;
       if (previous != null) await previous.close();
-      if (requireConsentAssertion && ownerPurpose.trim().isEmpty) {
+      if (!_foreground && quickCapture == null) {
         await _fail(generation);
         return;
       }
-      if (requireConsentAssertion && !participantsConsentArmed && !selfOnlyAsserted) {
+      if (requireConsentAssertion && quickCapture == null && ownerPurpose.trim().isEmpty) {
+        await _fail(generation);
+        return;
+      }
+      if (requireConsentAssertion && quickCapture == null && !participantsConsentArmed && !selfOnlyAsserted) {
         await _fail(generation);
         return;
       }
@@ -312,12 +386,26 @@ class PrivacyCaptureController {
       _ending = false;
       transcripts.clear();
 
-      final basis = participantsConsentArmed ? 'participants_consented' : PrivacyCaptureConfig.defaultConsentBasis;
+      final startAt = _now();
+      final basis = quickCapture != null
+          ? PrivacyCaptureConfig.defaultConsentBasis
+          : (participantsConsentArmed ? 'participants_consented' : PrivacyCaptureConfig.defaultConsentBasis);
+      final localBasis = quickCapture == null ? basis : PrivacyCaptureConfig.quickGestureConsentBasis;
+      final wirePurpose = quickCapture == null ? purpose : PrivacyCaptureConfig.defaultPurpose;
+      final effectiveOwnerPurpose = quickCapture?.purpose.provenanceValue ?? ownerPurpose;
+      final assertedAt = quickCapture?.assertedAt ?? _pendingConsentAssertedAt ?? startAt;
       participantsConsentArmed = false;
       selfOnlyAsserted = false;
-      consentBasis = basis;
+      _pendingConsentAssertedAt = null;
+      consentBasis = localBasis;
+      wireConsentBasis = basis;
+      configuredPurpose = quickCapture?.purpose.provenanceValue;
+      captureOrigin = quickCapture == null
+          ? PrivacyCaptureConfig.phoneManualCaptureOrigin
+          : PrivacyCaptureConfig.pendantQuickCaptureOrigin;
+      retentionChoice = quickCapture?.retention;
 
-      if (!await ble.isConnected || !_consentAllowed(basis)) {
+      if (!await ble.isConnected || !_consentAllowed(basis, wirePurpose: wirePurpose)) {
         await _fail(generation);
         return;
       }
@@ -335,10 +423,15 @@ class PrivacyCaptureController {
       try {
         await journal?.onAuthorizing(
           captureId: captureId,
-          purpose: purpose,
-          ownerPurpose: ownerPurpose,
-          consentBasis: basis,
-          at: _now(),
+          purpose: wirePurpose,
+          ownerPurpose: effectiveOwnerPurpose,
+          consentBasis: localBasis,
+          wireConsentBasis: basis,
+          consentAssertedAt: assertedAt,
+          configuredPurpose: configuredPurpose,
+          captureOrigin: captureOrigin,
+          retentionChoice: retentionChoice,
+          at: startAt,
           protocolVersion: config.protocolVersion,
           policyRevision: config.policyRevision,
         );
@@ -346,7 +439,11 @@ class PrivacyCaptureController {
         await _fail(generation);
         return;
       }
-      final message = _startCaptureJson(captureId: captureId, consentBasis: basis);
+      final message = _startCaptureJson(
+        captureId: captureId,
+        purpose: wirePurpose,
+        consentBasis: basis,
+      );
       lastStartCaptureJson = message;
       lastAuthorizationHeader = 'Bearer $token';
 
@@ -478,14 +575,18 @@ class PrivacyCaptureController {
     }
   }
 
-  bool _consentAllowed(String basis) {
+  bool _consentAllowed(String basis, {required String wirePurpose}) {
     if (!PrivacyCaptureConfig.allowedConsentBases.contains(basis)) return false;
-    if (!PrivacyCaptureConfig.allowedPurposes.contains(purpose)) return false;
-    if (purpose == 'self_voice_enrollment' && basis != PrivacyCaptureConfig.defaultConsentBasis) return false;
+    if (!PrivacyCaptureConfig.allowedPurposes.contains(wirePurpose)) return false;
+    if (wirePurpose == 'self_voice_enrollment' && basis != PrivacyCaptureConfig.defaultConsentBasis) return false;
     return true;
   }
 
-  String _startCaptureJson({required String captureId, required String consentBasis}) {
+  String _startCaptureJson({
+    required String captureId,
+    required String purpose,
+    required String consentBasis,
+  }) {
     final timestamp = _now().toUtc();
     String two(int value) => value.toString().padLeft(2, '0');
     final formatted =
@@ -692,8 +793,15 @@ class PrivacyCaptureController {
     _openedCaptureId = null;
     _lastAcceptedSequence = null;
     consentBasis = PrivacyCaptureConfig.defaultConsentBasis;
+    wireConsentBasis = PrivacyCaptureConfig.defaultConsentBasis;
+    captureOrigin = PrivacyCaptureConfig.phoneManualCaptureOrigin;
+    configuredPurpose = null;
+    retentionChoice = null;
     participantsConsentArmed = false;
     selfOnlyAsserted = false;
+    _pendingConsentAssertedAt = null;
+    _pendingQuickCapture = null;
+    _backgroundQuickCaptureGeneration = null;
     await _closeAudio();
     final session = _session;
     _session = null;

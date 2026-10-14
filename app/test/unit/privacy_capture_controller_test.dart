@@ -3,8 +3,10 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/services/privacy_capture/privacy_capture_config.dart';
-import 'package:omi/services/privacy_capture/privacy_pcm16.dart';
 import 'package:omi/services/privacy_capture/privacy_capture_controller.dart';
+import 'package:omi/services/privacy_capture/privacy_models.dart';
+import 'package:omi/services/privacy_capture/privacy_pcm16.dart';
+import 'package:omi/services/privacy_capture/privacy_quick_capture.dart';
 
 void main() {
   test('recording stays off and audio stays unsubscribed until StartCaptureAck', () async {
@@ -243,7 +245,8 @@ void main() {
     final pcm = _Harness(credentials: _MemoryCredentials(PrivacyCaptureConfig.stagingLiveUrl, 'secret-token'));
     final start = pcm.controller.start();
     await pcm.pump();
-    pcm.socket.emit('{"type":"StartCaptureAck","version":1,"capture_id":"11111111-1111-4111-8111-111111111111","authorized_at":"2026-10-09T12:00:01Z"}');
+    pcm.socket.emit(
+        '{"type":"StartCaptureAck","version":1,"capture_id":"11111111-1111-4111-8111-111111111111","authorized_at":"2026-10-09T12:00:01Z"}');
     await start;
     expect(pcm.socket.url.toString(), PrivacyCaptureConfig.stagingLiveUrl);
     pcm.ble.audio.add(const [9, 9, 9]);
@@ -481,7 +484,10 @@ void main() {
     expect(harness.controller.recording, isFalse);
     expect(harness.socket.connects, 1);
     expect(harness.ble.audioSubscribes, 1);
-    expect(harness.controller.traces.any((item) => item.type == 'TranscriptResult' && item.decoded && item.captureIdMatched), isTrue);
+    expect(
+        harness.controller.traces
+            .any((item) => item.type == 'TranscriptResult' && item.decoded && item.captureIdMatched),
+        isTrue);
     expect(harness.controller.traces.any((item) => item.type == 'socket_close' && item.closeCode == 1000), isTrue);
   });
 
@@ -570,6 +576,325 @@ void main() {
     expect(taps.socket.connects, 1);
     expect(taps.controller.state, PrivacyCaptureState.finalizing);
   });
+
+  test('ready quick gesture is one-shot, wire compatible, and stops on second tap', () async {
+    final journal = _FakeJournal();
+    final harness = _Harness(
+      journal: journal,
+      requireConsentAssertion: true,
+      ownerPurpose: 'manual mixed-party purpose',
+    );
+    harness.controller.armParticipantsConsented(consentObtained: true);
+    final assertion = DateTime.utc(2026, 10, 9, 11, 59, 58);
+    final intent = QuickSelfCaptureIntent(
+      purpose: QuickSelfCapturePurpose.selfReflection,
+      retention: PrivacyRetentionChoice.days7,
+      assertedAt: assertion,
+    );
+
+    final start = harness.controller.onDoubleTap(quickCapture: intent);
+    await harness.pump();
+    expect(harness.controller.state, PrivacyCaptureState.authorizing);
+    expect(harness.ble.audioSubscribes, 0);
+    expect(harness.socket.connects, 1);
+    expect(harness.controller.participantsConsentArmed, isFalse);
+    expect(harness.controller.consentBasis, PrivacyCaptureConfig.quickGestureConsentBasis);
+    expect(harness.controller.wireConsentBasis, PrivacyCaptureConfig.defaultConsentBasis);
+    expect(harness.controller.captureOrigin, PrivacyCaptureConfig.pendantQuickCaptureOrigin);
+    expect(harness.controller.configuredPurpose, 'self_reflection');
+    expect(harness.controller.retentionChoice, PrivacyRetentionChoice.days7);
+
+    await harness.controller.onDoubleTap(quickCapture: intent);
+    expect(harness.socket.connects, 1);
+    expect(harness.ble.audioSubscribes, 0);
+
+    final sent = jsonDecode(harness.socket.texts.single) as Map<String, dynamic>;
+    expect(sent['purpose'], PrivacyCaptureConfig.defaultPurpose);
+    expect(sent['consent_basis'], PrivacyCaptureConfig.defaultConsentBasis);
+    expect(journal.authorizations, hasLength(1));
+    final authorization = journal.authorizations.single;
+    expect(authorization.consentBasis, PrivacyCaptureConfig.quickGestureConsentBasis);
+    expect(authorization.wireConsentBasis, PrivacyCaptureConfig.defaultConsentBasis);
+    expect(authorization.consentAssertedAt, assertion);
+    expect(authorization.configuredPurpose, 'self_reflection');
+    expect(authorization.captureOrigin, PrivacyCaptureConfig.pendantQuickCaptureOrigin);
+    expect(authorization.retentionChoice, PrivacyRetentionChoice.days7);
+
+    harness.socket.emit(jsonEncode({
+      'type': 'StartCaptureAck',
+      'version': 1,
+      'capture_id': sent['capture_id'],
+    }));
+    await start;
+    expect(harness.controller.state, PrivacyCaptureState.recording);
+    expect(harness.ble.audioSubscribes, 1);
+
+    await harness.controller.onDoubleTap();
+    expect(harness.controller.state, PrivacyCaptureState.finalizing);
+    await harness.controller.onDoubleTap();
+    expect(
+      harness.socket.texts.where((text) => jsonDecode(text)['type'] == PrivacyCaptureConfig.closeType),
+      hasLength(1),
+    );
+    expect(harness.haptics, [PrivacyHaptic.start, PrivacyHaptic.stop]);
+  });
+
+  test('missing quick intent fails closed and cannot reuse mixed-party consent', () async {
+    final journal = _FakeJournal();
+    final harness = _Harness(
+      journal: journal,
+      requireConsentAssertion: true,
+      ownerPurpose: 'phone flow purpose',
+    );
+    harness.controller.armParticipantsConsented(consentObtained: true);
+
+    await harness.controller.onDoubleTap();
+
+    expect(harness.controller.state, PrivacyCaptureState.off);
+    expect(harness.controller.participantsConsentArmed, isFalse);
+    expect(harness.controller.selfOnlyAsserted, isFalse);
+    expect(harness.socket.connects, 0);
+    expect(harness.ble.audioSubscribes, 0);
+    expect(journal.authorizations, isEmpty);
+    expect(harness.haptics, [PrivacyHaptic.error]);
+
+    await harness.controller.start();
+    expect(harness.socket.connects, 0);
+    expect(harness.ble.audioSubscribes, 0);
+    expect(harness.haptics.last, PrivacyHaptic.error);
+  });
+
+  test('phone self-only and mixed-party assertions remain explicit and wire compatible', () async {
+    Future<_Authorization> authorize({required bool mixed}) async {
+      final journal = _FakeJournal();
+      final harness = _Harness(
+        journal: journal,
+        requireConsentAssertion: true,
+        ownerPurpose: mixed ? 'Interview notes' : 'Private thought',
+      );
+      if (mixed) {
+        harness.controller.armParticipantsConsented(consentObtained: true);
+      } else {
+        harness.controller.assertSelfOnly();
+      }
+      final start = harness.controller.start();
+      await harness.pump();
+      final sent = jsonDecode(harness.socket.texts.single) as Map<String, dynamic>;
+      expect(sent['consent_basis'], mixed ? 'participants_consented' : 'self_only');
+      expect(harness.ble.audioSubscribes, 0);
+      harness.socket.emit(jsonEncode({
+        'type': 'StartCaptureAck',
+        'version': 1,
+        'capture_id': sent['capture_id'],
+      }));
+      await start;
+      expect(harness.controller.state, PrivacyCaptureState.recording);
+      return journal.authorizations.single;
+    }
+
+    final self = await authorize(mixed: false);
+    expect(self.consentBasis, PrivacyCaptureConfig.defaultConsentBasis);
+    expect(self.wireConsentBasis, PrivacyCaptureConfig.defaultConsentBasis);
+    expect(self.captureOrigin, PrivacyCaptureConfig.phoneManualCaptureOrigin);
+    expect(self.configuredPurpose, isNull);
+
+    final mixed = await authorize(mixed: true);
+    expect(mixed.consentBasis, 'participants_consented');
+    expect(mixed.wireConsentBasis, 'participants_consented');
+    expect(mixed.captureOrigin, PrivacyCaptureConfig.phoneManualCaptureOrigin);
+    expect(mixed.configuredPurpose, isNull);
+  });
+
+  test('foreground-started quick capture is interrupted on background transition', () async {
+    final intent = QuickSelfCaptureIntent(
+      purpose: QuickSelfCapturePurpose.personalNote,
+      retention: PrivacyRetentionChoice.hours24,
+      assertedAt: _fixedNow,
+    );
+
+    final harness = await _recordingQuickCapture(intent);
+    await harness.controller.onBackground();
+
+    expect(harness.controller.state, PrivacyCaptureState.error);
+    expect(harness.controller.admissionOpen, isFalse);
+    expect(harness.socket.connects, 1);
+    await harness.controller.onForeground();
+    expect(harness.controller.state, PrivacyCaptureState.off);
+    expect(harness.socket.connects, 1);
+  });
+
+  test('background-started quick generation survives only its current lifecycle transition', () async {
+    final intent = QuickSelfCaptureIntent(
+      purpose: QuickSelfCapturePurpose.personalNote,
+      retention: PrivacyRetentionChoice.hours24,
+      assertedAt: _fixedNow,
+    );
+    final harness = _Harness(requireConsentAssertion: true);
+    await harness.controller.onBackground();
+
+    final pending = harness.controller.onDoubleTap(quickCapture: intent);
+    await harness.pump();
+    expect(harness.controller.state, PrivacyCaptureState.authorizing);
+    expect(harness.socket.connects, 1);
+
+    // iOS may deliver the same background state more than once around a BLE
+    // wake. It must not cancel the fresh, background-started generation.
+    await harness.controller.onBackground();
+    expect(harness.controller.state, PrivacyCaptureState.authorizing);
+    harness.socket.emit(
+      '{"type":"StartCaptureAck","version":1,"capture_id":"11111111-1111-4111-8111-111111111111"}',
+    );
+    await pending;
+    expect(harness.controller.state, PrivacyCaptureState.recording);
+    expect(harness.ble.audioSubscribes, 1);
+
+    await harness.controller.onBackground();
+    expect(harness.controller.state, PrivacyCaptureState.recording);
+    expect(harness.controller.admissionOpen, isTrue);
+
+    await harness.controller.onForeground();
+    expect(harness.controller.state, PrivacyCaptureState.recording);
+    expect(harness.socket.connects, 1);
+
+    // This is a new foreground -> background transition, not a duplicate of
+    // the transition that admitted the BLE wake.
+    await harness.controller.onBackground();
+    expect(harness.controller.state, PrivacyCaptureState.error);
+    expect(harness.controller.admissionOpen, isFalse);
+    expect(harness.socket.connects, 1);
+  });
+
+  test('background starts require a fresh quick intent and reject manual consent modes', () async {
+    final mixed = _Harness(
+      requireConsentAssertion: true,
+      ownerPurpose: 'Interview notes',
+    );
+    await mixed.controller.onBackground();
+    mixed.controller.armParticipantsConsented(consentObtained: true);
+    await mixed.controller.start();
+
+    expect(mixed.controller.state, PrivacyCaptureState.off);
+    expect(mixed.socket.connects, 0);
+    expect(mixed.ble.audioSubscribes, 0);
+    expect(mixed.haptics, [PrivacyHaptic.error]);
+
+    final noIntent = _Harness(requireConsentAssertion: true);
+    await noIntent.controller.onBackground();
+    await noIntent.controller.onDoubleTap();
+    expect(noIntent.controller.state, PrivacyCaptureState.off);
+    expect(noIntent.socket.connects, 0);
+    expect(noIntent.ble.audioSubscribes, 0);
+    expect(noIntent.haptics, [PrivacyHaptic.error]);
+  });
+
+  test('reconnect, relaunch, and interruption never resume background quick capture', () async {
+    final intent = QuickSelfCaptureIntent(
+      purpose: QuickSelfCapturePurpose.personalNote,
+      retention: PrivacyRetentionChoice.hours24,
+      assertedAt: _fixedNow,
+    );
+
+    final reconnected = await _recordingQuickCapture(intent, background: true);
+    await reconnected.controller.onReconnect();
+    expect(reconnected.controller.state, PrivacyCaptureState.error);
+    expect(reconnected.controller.admissionOpen, isFalse);
+    await reconnected.controller.onForeground();
+    expect(reconnected.controller.state, PrivacyCaptureState.off);
+    expect(reconnected.socket.connects, 1);
+
+    final relaunched = await _recordingQuickCapture(intent, background: true);
+    await relaunched.controller.onAppStart();
+    expect(relaunched.controller.state, PrivacyCaptureState.off);
+    expect(relaunched.controller.admissionOpen, isFalse);
+    expect(relaunched.socket.connects, 1);
+
+    final interrupted = await _recordingQuickCapture(intent, background: true);
+    interrupted.ble.audio.addError(StateError('interrupted'));
+    await interrupted.pump();
+    expect(interrupted.controller.state, PrivacyCaptureState.error);
+    expect(interrupted.controller.admissionOpen, isFalse);
+    await interrupted.controller.onForeground();
+    expect(interrupted.controller.state, PrivacyCaptureState.off);
+    expect(interrupted.socket.connects, 1);
+  });
+}
+
+final DateTime _fixedNow = DateTime.utc(2026, 10, 9, 12);
+
+Future<_Harness> _recordingQuickCapture(
+  QuickSelfCaptureIntent intent, {
+  bool background = false,
+}) async {
+  final harness = _Harness(requireConsentAssertion: true);
+  if (background) await harness.controller.onBackground();
+  final pending = harness.controller.onDoubleTap(quickCapture: intent);
+  await harness.pump();
+  harness.socket.emit(
+    '{"type":"StartCaptureAck","version":1,"capture_id":"11111111-1111-4111-8111-111111111111"}',
+  );
+  await pending;
+  return harness;
+}
+
+class _Authorization {
+  const _Authorization({
+    required this.consentBasis,
+    required this.wireConsentBasis,
+    required this.consentAssertedAt,
+    required this.configuredPurpose,
+    required this.captureOrigin,
+    required this.retentionChoice,
+  });
+
+  final String consentBasis;
+  final String wireConsentBasis;
+  final DateTime consentAssertedAt;
+  final String? configuredPurpose;
+  final String captureOrigin;
+  final PrivacyRetentionChoice? retentionChoice;
+}
+
+class _FakeJournal implements PrivacyCaptureJournal {
+  final authorizations = <_Authorization>[];
+
+  @override
+  Future<void> onAuthorizing({
+    required String captureId,
+    required String purpose,
+    required String ownerPurpose,
+    required String consentBasis,
+    required String wireConsentBasis,
+    required DateTime consentAssertedAt,
+    String? configuredPurpose,
+    required String captureOrigin,
+    PrivacyRetentionChoice? retentionChoice,
+    required DateTime at,
+    required int protocolVersion,
+    required int policyRevision,
+  }) async {
+    authorizations.add(_Authorization(
+      consentBasis: consentBasis,
+      wireConsentBasis: wireConsentBasis,
+      consentAssertedAt: consentAssertedAt,
+      configuredPurpose: configuredPurpose,
+      captureOrigin: captureOrigin,
+      retentionChoice: retentionChoice,
+    ));
+  }
+
+  @override
+  Future<void> onRecording(String captureId) async {}
+
+  @override
+  Future<bool> onTranscript(PrivacyTranscript transcript) async => true;
+
+  @override
+  Future<void> onTerminal({
+    required String captureId,
+    required String outcome,
+    required bool incomplete,
+    required DateTime at,
+  }) async {}
 }
 
 class _MemoryCredentials implements PrivacyCredentialStore {
@@ -655,6 +980,7 @@ class _FakeSession implements PrivacySocketSession {
     if (socket.failSend) throw StateError('send failed');
     socket.bytes.add(List<int>.from(bytes));
   }
+
   @override
   Future<void> close() async {
     socket.closed = true;
@@ -665,6 +991,10 @@ class _Harness {
   _Harness({
     PrivacyCredentialStore? credentials,
     String purpose = PrivacyCaptureConfig.defaultPurpose,
+    String ownerPurpose = '',
+    bool requireConsentAssertion = false,
+    PrivacyCaptureJournal? journal,
+    PrivacyCaptureConfig config = const PrivacyCaptureConfig(),
     int codecId = PrivacyPcm16.pcm16CodecId,
     List<int> Function(List<int> opusPayload)? decodeOpus,
   }) : credentials = credentials ?? _MemoryCredentials('wss://stt.home.internal/live', 'secret-token') {
@@ -676,9 +1006,13 @@ class _Harness {
       sink: sink,
       onHaptic: haptics.add,
       onState: (_) {},
+      config: config,
       now: () => DateTime.utc(2026, 10, 9, 12),
       newCaptureId: () => '11111111-1111-4111-8111-111111111111',
       purpose: purpose,
+      ownerPurpose: ownerPurpose,
+      requireConsentAssertion: requireConsentAssertion,
+      journal: journal,
       decodeOpus: decodeOpus,
     );
   }

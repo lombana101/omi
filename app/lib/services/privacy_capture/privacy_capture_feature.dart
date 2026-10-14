@@ -9,14 +9,19 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import 'package:omi/services/devices/models.dart';
+import 'package:omi/services/devices/connectors/device_connection.dart';
 import 'package:omi/services/devices/transports/device_transport.dart';
 import 'package:omi/services/devices.dart';
+import 'package:omi/services/privacy_capture/privacy_capture_config.dart';
 import 'package:omi/services/privacy_capture/privacy_capture_controller.dart';
 import 'package:omi/services/privacy_capture/privacy_capture_io.dart';
 import 'package:omi/gen/pigeon_communicator.g.dart';
 import 'package:omi/services/privacy_capture/privacy_copy.dart';
 import 'package:omi/services/privacy_capture/privacy_journal.dart';
 import 'package:omi/services/privacy_capture/privacy_off_link.dart';
+import 'package:omi/services/privacy_capture/privacy_pendant_battery.dart';
+import 'package:omi/services/privacy_capture/privacy_quick_capture.dart';
 import 'package:omi/services/privacy_capture/privacy_store.dart';
 
 const privacyCaptureEnabled = bool.fromEnvironment('OMI_PRIVACY_CAPTURE', defaultValue: false);
@@ -99,6 +104,26 @@ class _LatestTransportBle implements PrivacyBlePort {
   Future<void> unsubscribeAudio() async {
     await _ble?.unsubscribeAudio();
   }
+
+  Future<void> playHaptic(PrivacyHaptic haptic) async {
+    final current = transport;
+    if (current == null) return;
+    final level = switch (haptic) {
+      PrivacyHaptic.start => 2,
+      PrivacyHaptic.stop => 1,
+      PrivacyHaptic.error => 3,
+    };
+    try {
+      if (!await current.isConnected()) return;
+      await current.writeCharacteristic(
+        speakerDataStreamServiceUuid,
+        speakerDataStreamCharacteristicUuid,
+        [level],
+      );
+    } catch (_) {
+      // Feedback must never weaken or delay the authorization gate.
+    }
+  }
 }
 
 /// Compile-time privacy build. Stock builds leave this unused.
@@ -108,6 +133,12 @@ class PrivacyCaptureHost {
   static final diagnostics = ValueNotifier<PrivacyLinkDiagnostics>(
     const PrivacyLinkDiagnostics(buttonSubscribed: false, audioSubscribed: false),
   );
+  static final quickSettings = ValueNotifier<QuickSelfCaptureSettings>(
+    const QuickSelfCaptureSettings(),
+  );
+  static final quickMessage = ValueNotifier<String?>(null);
+  static final pendantBattery = PrivacyPendantBatteryMonitor();
+  static QuickSelfCapturePreferences quickPreferences = PrefsQuickSelfCapturePreferences();
   static final _ble = _LatestTransportBle();
   static final devices = DeviceService();
   static bool _devicesStarted = false;
@@ -131,6 +162,13 @@ class PrivacyCaptureHost {
   static String? bootError;
 
   static Future<void> _open() async {
+    try {
+      quickSettings.value = await quickPreferences.load();
+      quickMessage.value = null;
+    } catch (_) {
+      quickSettings.value = const QuickSelfCaptureSettings();
+      quickMessage.value = PrivacyCopy.quickNeedsConfiguration;
+    }
     try {
       final support = await getApplicationSupportDirectory();
       final dir = Directory('${support.path}/privacy_v1');
@@ -157,20 +195,70 @@ class PrivacyCaptureHost {
       socket: IoPrivacySocket(),
       credentials: SecurePrivacyCredentialStore(),
       sink: const DroppingAudioSink(),
-      onHaptic: playPrivacyHaptic,
-      onState: (next) => state.value = next,
+      onHaptic: (haptic) {
+        playPrivacyHaptic(haptic);
+        unawaited(_ble.playHaptic(haptic));
+      },
+      onState: (next) {
+        state.value = next;
+        final current = diagnostics.value;
+        diagnostics.value = PrivacyLinkDiagnostics(
+          buttonSubscribed: current.buttonSubscribed,
+          audioSubscribed: next == PrivacyCaptureState.recording,
+          lastButtonCode: current.lastButtonCode,
+        );
+      },
       onTrace: () => transcriptTick.value++,
       decodeOpus: decodePendantOpus,
+      requireConsentAssertion: true,
     );
+  }
+
+  static Future<void> updateQuickSettings(QuickSelfCaptureSettings settings) async {
+    await quickPreferences.save(settings);
+    final live = _controller;
+    if (!settings.enabled &&
+        live != null &&
+        live.captureOrigin == PrivacyCaptureConfig.pendantQuickCaptureOrigin &&
+        live.state != PrivacyCaptureState.off) {
+      await live.onBackground();
+    }
+    quickSettings.value = settings;
+    quickMessage.value = null;
   }
 
   static Future<void> onDoubleTap(Future<DeviceTransport?> Function() lookup) async {
     if (!privacyCaptureEnabled) return;
     await ensureReady();
-    final choice = await store?.readRetention();
-    if (choice == null) return;
-    _ble.transport = await lookup();
-    await controller.onDoubleTap();
+    await _handlePendantDoubleTap(lookup: lookup);
+  }
+
+  static Future<void> _handlePendantDoubleTap({
+    Future<DeviceTransport?> Function()? lookup,
+  }) async {
+    final live = controller;
+    if (live.state == PrivacyCaptureState.recording ||
+        live.state == PrivacyCaptureState.authorizing ||
+        live.state == PrivacyCaptureState.finalizing) {
+      await live.onDoubleTap();
+      return;
+    }
+
+    final settings = quickSettings.value;
+    if (!settings.ready || store == null || bootError != null) {
+      quickMessage.value = PrivacyCopy.quickNeedsConfiguration;
+      await live.onDoubleTap();
+      return;
+    }
+
+    if (lookup != null) _ble.transport = await lookup();
+    await live.onDoubleTap(
+      quickCapture: QuickSelfCaptureIntent(
+        purpose: settings.purpose!,
+        retention: settings.retention!,
+        assertedAt: DateTime.now(),
+      ),
+    );
   }
 
   static Future<void> armConnectedLink(DeviceTransport? transport, {required String deviceId}) async {
@@ -181,10 +269,10 @@ class PrivacyCaptureHost {
     final link = await armPrivacyOffLink(_ble, onButton: (code) {
       diagnostics.value = PrivacyLinkDiagnostics(
         buttonSubscribed: true,
-        audioSubscribed: false,
+        audioSubscribed: controller.state == PrivacyCaptureState.recording,
         lastButtonCode: code,
       );
-      if (code == 2) unawaited(controller.onDoubleTap());
+      if (code == 2) unawaited(_handlePendantDoubleTap());
     });
     diagnostics.value = link;
     try {
@@ -194,9 +282,13 @@ class PrivacyCaptureHost {
     if (controller.state != PrivacyCaptureState.off) {
       await controller.onReconnect();
       await armPrivacyOffLink(_ble, onButton: (code) {
-        if (code == 2) unawaited(controller.onDoubleTap());
+        if (code == 2) unawaited(_handlePendantDoubleTap());
       });
     }
+  }
+
+  static Future<void> observePendantBattery(DeviceConnection connection) async {
+    await pendantBattery.bind(connection);
   }
 
   static Future<void> ensureAudioOff(DeviceTransport? transport) async {
@@ -206,5 +298,11 @@ class PrivacyCaptureHost {
     if (live) return;
     await _ble.unsubscribeAudio();
     await _ble.maintainButtonNotifications();
+    final current = diagnostics.value;
+    diagnostics.value = PrivacyLinkDiagnostics(
+      buttonSubscribed: current.buttonSubscribed,
+      audioSubscribed: false,
+      lastButtonCode: current.lastButtonCode,
+    );
   }
 }

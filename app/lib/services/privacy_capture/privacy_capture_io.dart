@@ -73,7 +73,14 @@ class IoPrivacySocket implements PrivacySocketPort {
       headers: <String, dynamic>{'Authorization': authorizationHeader},
       pingInterval: PrivacyCaptureConfig.socketPingInterval,
     );
-    await channel.ready;
+    try {
+      // A CoreBluetooth background wake is short. Fail closed instead of
+      // waiting indefinitely with an authorization journal but no audio.
+      await channel.ready.timeout(const Duration(seconds: 6));
+    } catch (_) {
+      unawaited(channel.sink.close());
+      rethrow;
+    }
     return _IoPrivacySocketSession(channel);
   }
 }

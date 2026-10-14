@@ -4,6 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/l10n/app_localizations.dart';
 import 'package:omi/services/privacy_capture/privacy_capture_controller.dart';
 import 'package:omi/services/privacy_capture/privacy_copy.dart';
+import 'package:omi/services/privacy_capture/privacy_pendant_battery.dart';
+import 'package:omi/services/privacy_capture/privacy_quick_capture.dart';
 import 'package:omi/services/privacy_capture/privacy_shell.dart';
 
 void main() {
@@ -11,22 +13,30 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(800, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
-      const MediaQuery(
-        data: MediaQueryData(textScaler: TextScaler.linear(2)),
+      MediaQuery(
+        data: const MediaQueryData(textScaler: TextScaler.linear(2)),
         child: MaterialApp(
-          localizationsDelegates: [
+          localizationsDelegates: const [
             AppLocalizations.delegate,
             GlobalMaterialLocalizations.delegate,
             GlobalWidgetsLocalizations.delegate,
             GlobalCupertinoLocalizations.delegate,
           ],
           supportedLocales: AppLocalizations.supportedLocales,
-          home: PrivacyShell(findPendant: _noPendant),
+          home: PrivacyShell(
+            findPendant: _noPendant,
+            quickPreferences: MemoryQuickSelfCapturePreferences(),
+          ),
         ),
       ),
     );
     await tester.pump();
     expect(find.text(PrivacyCopy.recordingOff), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('privacy_quick_setup')), findsOneWidget);
+    expect(find.byKey(const Key('privacy_start')), findsNothing);
+    await tester.tap(find.byKey(const Key('privacy_manual_options')));
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('privacy_start')), findsOneWidget);
     expect(find.text(PrivacyCopy.start), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -50,6 +60,50 @@ void main() {
     await controller.onBackground();
     expect(controller.state, PrivacyCaptureState.off);
     expect(controller.recording, isFalse);
+  });
+
+  testWidgets('pendant battery exposes measured, unavailable, and disconnected text', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final battery = ValueNotifier<PrivacyPendantBatteryStatus>(
+      const PrivacyPendantBatteryStatus.reading(72),
+    );
+    addTearDown(battery.dispose);
+    final semantics = tester.ensureSemantics();
+
+    await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: PrivacyShell(
+        findPendant: _noPendant,
+        quickPreferences: MemoryQuickSelfCapturePreferences(),
+        pendantBattery: battery,
+      ),
+    ));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('72%'), findsOneWidget);
+    expect(
+      tester.getSemantics(find.byKey(const Key('privacy_pendant_battery'))).getSemanticsData().label,
+      contains('${PrivacyCopy.pendantBattery}: 72%'),
+    );
+
+    battery.value = const PrivacyPendantBatteryStatus.unavailable();
+    await tester.pump();
+    expect(find.text(PrivacyCopy.unavailable), findsOneWidget);
+
+    battery.value = const PrivacyPendantBatteryStatus.disconnected();
+    await tester.pump();
+    expect(
+      tester.getSemantics(find.byKey(const Key('privacy_pendant_battery'))).getSemanticsData().label,
+      contains('${PrivacyCopy.pendantBattery}: ${PrivacyCopy.disconnected}'),
+    );
+    semantics.dispose();
   });
 }
 

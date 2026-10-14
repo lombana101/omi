@@ -24,6 +24,7 @@ class PrivacySessionRecord {
     required this.purpose,
     required this.ownerPurpose,
     required this.consentBasis,
+    String? wireConsentBasis,
     required this.protocolVersion,
     required this.policyRevision,
     required this.outcome,
@@ -31,11 +32,13 @@ class PrivacySessionRecord {
     this.stoppedAt,
     this.completedAt,
     this.consentAssertedAt,
+    this.configuredPurpose,
+    this.captureOrigin = 'phone_manual_capture',
     this.failureClass,
     this.retentionChoice,
     this.expiresAt,
     this.deleteOnNextLaunch = false,
-  });
+  }) : wireConsentBasis = wireConsentBasis ?? consentBasis;
 
   final String localId;
   final String captureId;
@@ -44,8 +47,15 @@ class PrivacySessionRecord {
   final DateTime? completedAt;
   final String purpose;
   final String ownerPurpose;
+
+  /// Local assertion basis. Quick sessions use `self_only_quick_gesture`.
   final String consentBasis;
+
+  /// Value sent to the current backend contract.
+  final String wireConsentBasis;
   final DateTime? consentAssertedAt;
+  final String? configuredPurpose;
+  final String captureOrigin;
   final int protocolVersion;
   final int policyRevision;
   final String outcome;
@@ -75,6 +85,7 @@ class PrivacySessionRecord {
       purpose: purpose,
       ownerPurpose: ownerPurpose,
       consentBasis: consentBasis,
+      wireConsentBasis: wireConsentBasis,
       protocolVersion: protocolVersion,
       policyRevision: policyRevision,
       outcome: outcome ?? this.outcome,
@@ -82,6 +93,8 @@ class PrivacySessionRecord {
       stoppedAt: stoppedAt ?? this.stoppedAt,
       completedAt: completedAt ?? this.completedAt,
       consentAssertedAt: consentAssertedAt,
+      configuredPurpose: configuredPurpose,
+      captureOrigin: captureOrigin,
       failureClass: failureClass ?? this.failureClass,
       retentionChoice: retentionChoice ?? this.retentionChoice,
       expiresAt: clearExpires ? null : (expiresAt ?? this.expiresAt),
@@ -98,7 +111,10 @@ class PrivacySessionRecord {
         'purpose': purpose,
         'owner_purpose': ownerPurpose,
         'consent_basis': consentBasis,
+        'wire_consent_basis': wireConsentBasis,
         'consent_asserted_at': consentAssertedAt?.toUtc().toIso8601String(),
+        'configured_purpose': configuredPurpose,
+        'capture_origin': captureOrigin,
         'protocol_version': protocolVersion,
         'policy_revision': policyRevision,
         'outcome': outcome,
@@ -119,7 +135,10 @@ class PrivacySessionRecord {
       purpose: json['purpose'] as String? ?? 'personal_memory',
       ownerPurpose: json['owner_purpose'] as String? ?? '',
       consentBasis: json['consent_basis'] as String? ?? 'self_only',
+      wireConsentBasis: json['wire_consent_basis'] as String?,
       consentAssertedAt: _time(json['consent_asserted_at']),
+      configuredPurpose: json['configured_purpose'] as String?,
+      captureOrigin: json['capture_origin'] as String? ?? 'phone_manual_capture',
       protocolVersion: json['protocol_version'] as int? ?? 1,
       policyRevision: json['policy_revision'] as int? ?? 1,
       outcome: json['outcome'] as String? ?? 'interrupted',
@@ -372,6 +391,7 @@ class PrivacyTaskRecord {
   bool get isOpen => status == 'open';
 
   PrivacyTaskRecord copyWith({
+    String? taskId,
     String? title,
     String? note,
     bool clearNote = false,
@@ -393,7 +413,7 @@ class PrivacyTaskRecord {
     bool clearToday = false,
   }) {
     return PrivacyTaskRecord(
-      taskId: taskId,
+      taskId: taskId ?? this.taskId,
       title: title ?? this.title,
       note: clearNote ? null : (note ?? this.note),
       status: status ?? this.status,

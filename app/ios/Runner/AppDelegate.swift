@@ -510,8 +510,12 @@ final class QuickActionsIconPatcher: NSObject {
             return
         }
         do {
+            // Quick Self Capture is allowed to start from a CoreBluetooth wake
+            // while the phone is locked. Keep the store encrypted until the
+            // first owner unlock after boot, then available to that background
+            // capture path. `.complete` makes the journal fail after every lock.
             try FileManager.default.setAttributes(
-                [.protectionKey: FileProtectionType.complete],
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
                 ofItemAtPath: path
             )
             var url = URL(fileURLWithPath: path)
@@ -521,7 +525,8 @@ final class QuickActionsIconPatcher: NSObject {
             let attrs = try FileManager.default.attributesOfItem(atPath: path)
             let protection = attrs[.protectionKey] as? FileProtectionType
             let readBack = try url.resourceValues(forKeys: [.isExcludedFromBackupKey])
-            guard protection == .complete, readBack.isExcludedFromBackup == true else {
+            guard protection == .completeUntilFirstUserAuthentication,
+                  readBack.isExcludedFromBackup == true else {
                 result(false)
                 return
             }

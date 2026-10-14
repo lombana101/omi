@@ -5,9 +5,11 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/l10n/app_localizations.dart';
 import 'package:omi/services/privacy_capture/privacy_copy.dart';
+import 'package:omi/services/privacy_capture/privacy_quick_capture.dart';
 import 'package:omi/services/privacy_capture/privacy_shell.dart';
 import 'package:omi/services/privacy_capture/privacy_store.dart';
 import 'package:omi/services/privacy_capture/privacy_suggestion.dart';
+import 'package:omi/services/privacy_capture/privacy_theme.dart';
 
 void main() {
   testWidgets('suggestions and tasks expose review controls', (tester) async {
@@ -51,15 +53,43 @@ void main() {
         GlobalCupertinoLocalizations.delegate,
       ],
       supportedLocales: AppLocalizations.supportedLocales,
-      home: PrivacyShell(store: store, initialTab: 2, findPendant: () async => PrivacyCopy.notConnected),
+      home: PrivacyShell(
+        store: store,
+        initialTab: 2,
+        findPendant: () async => PrivacyCopy.notConnected,
+        quickPreferences: MemoryQuickSelfCapturePreferences(),
+        themeStore: MemoryPrivacyThemeStore(),
+      ),
     ));
     await tester.pump();
-    expect(find.text(PrivacyCopy.notATask), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 300));
+
+    await tester.tap(find.byKey(const Key('privacy_task_category_suggestions')));
+    await tester.pumpAndSettle();
+    expect(find.text(PrivacyCopy.suggestionNotTask), findsOneWidget);
     expect(find.text(PrivacyCopy.editAccept), findsWidgets);
+    expect(find.text(PrivacyCopy.reviewCalendarSuggestion), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('privacy_task_category_inbox')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Call back'));
+    await tester.pumpAndSettle();
     expect(find.text(PrivacyCopy.chooseDue), findsOneWidget);
     expect(find.text(PrivacyCopy.assignProject), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('privacy_task_category_projects')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Home'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Project actions'));
+    await tester.pumpAndSettle();
     expect(find.text(PrivacyCopy.rename), findsWidgets);
-    expect(find.text(PrivacyCopy.reviewCalendarSuggestion), findsOneWidget);
+    expect(find.text(PrivacyCopy.archive), findsOneWidget);
+    await tester.tap(find.text(PrivacyCopy.rename).last);
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -85,20 +115,47 @@ void main() {
         GlobalCupertinoLocalizations.delegate,
       ],
       supportedLocales: AppLocalizations.supportedLocales,
-      home: PrivacyShell(store: store, initialTab: 1, findPendant: () async => PrivacyCopy.notConnected),
+      home: PrivacyShell(
+        store: store,
+        initialTab: 1,
+        findPendant: () async => PrivacyCopy.notConnected,
+        quickPreferences: MemoryQuickSelfCapturePreferences(),
+        themeStore: MemoryPrivacyThemeStore(),
+      ),
     ));
     await tester.pump();
-    await tester.tap(find.text(PrivacyCopy.interrupted));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('gone'));
+    await tester.pumpAndSettle();
     expect(find.text(PrivacyCopy.deleteSession), findsOneWidget);
     await tester.tap(find.text(PrivacyCopy.deleteSession));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
     expect(find.text(PrivacyCopy.confirmDelete), findsOneWidget);
-    expect(find.textContaining(PrivacyCopy.deletedPhone), findsNothing);
+    expect((await tester.runAsync(() => store!.sessions()))!.length, 1);
     await tester.tap(find.text(PrivacyCopy.cancel));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('gone'), findsOneWidget);
+
+    await tester.tap(find.text(PrivacyCopy.deleteSession));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, PrivacyCopy.confirmDelete));
+    await tester.pumpAndSettle();
+    for (var attempt = 0; attempt < 20; attempt++) {
+      if ((await tester.runAsync(() => store!.sessions()))!.isEmpty) break;
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    for (var attempt = 0; attempt < 20 && find.text('gone').evaluate().isNotEmpty; attempt++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await tester.pumpAndSettle();
+
+    expect(find.text(PrivacyCopy.confirmDelete), findsNothing);
+    expect((await tester.runAsync(() => store!.sessions()))!, isEmpty);
+    expect(find.text('gone'), findsNothing);
+    expect(find.text(PrivacyCopy.deletedSuccess), findsOneWidget);
+    expect(find.textContaining(PrivacyCopy.deletedPhone), findsOneWidget);
   });
 }

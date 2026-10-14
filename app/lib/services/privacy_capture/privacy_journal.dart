@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import 'package:omi/services/privacy_capture/privacy_capture_config.dart';
 import 'package:omi/services/privacy_capture/privacy_capture_controller.dart';
+import 'package:omi/services/privacy_capture/privacy_models.dart';
 import 'package:omi/services/privacy_capture/privacy_store.dart';
 
 class PrivacyStoreJournal implements PrivacyCaptureJournal {
@@ -18,6 +19,11 @@ class PrivacyStoreJournal implements PrivacyCaptureJournal {
     required String purpose,
     required String ownerPurpose,
     required String consentBasis,
+    required String wireConsentBasis,
+    required DateTime consentAssertedAt,
+    String? configuredPurpose,
+    required String captureOrigin,
+    PrivacyRetentionChoice? retentionChoice,
     required DateTime at,
     required int protocolVersion,
     required int policyRevision,
@@ -27,6 +33,11 @@ class PrivacyStoreJournal implements PrivacyCaptureJournal {
       purpose: purpose,
       ownerPurpose: ownerPurpose,
       consentBasis: consentBasis,
+      wireConsentBasis: wireConsentBasis,
+      consentAssertedAt: consentAssertedAt,
+      configuredPurpose: configuredPurpose,
+      captureOrigin: captureOrigin,
+      retentionChoice: retentionChoice,
       protocolVersion: protocolVersion,
       policyRevision: policyRevision,
       at: at,
