@@ -132,6 +132,62 @@ void main() {
     expect(candidate.suggestedType, 'habit');
   });
 
+  test('proactive deadline advice persists once and dismissal prevents resurfacing', () async {
+    final directory = await Directory.systemTemp.createTemp('privacy-coordinator-proactive');
+    final store = await PrivacyStore.open(directory);
+    final dueAt = DateTime(2026, 10, 14, 17);
+    final task = await store.createTask(title: 'Finish Memoria improvements', dueAt: dueAt);
+    var calls = 0;
+    final client = PrivacyIntelligenceClient(
+      credentials: _Credentials(),
+      httpClient: MockClient((request) async {
+        calls++;
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final tasks = (body['open_tasks'] as List<dynamic>).cast<Map<String, dynamic>>();
+        expect(tasks.single['task_id'], task.value!.taskId);
+        return http.Response(
+          jsonEncode(<String, Object?>{
+            'suggestions': <Object?>[
+              <String, Object?>{
+                'suggested_type': 'advice',
+                'title': 'Plan for Finish Memoria improvements',
+                'description': 'The task is due tomorrow.',
+                'proposed_time_text': 'today',
+                'source_ref': 'proactive:deadline:2026-10-14:${task.value!.taskId}',
+                'supporting_excerpt': 'Finish Memoria improvements',
+                'uncertainty': 0.0,
+                'review_state': 'pending',
+              },
+            ],
+            'used_local_tasks': true,
+            'used_timetree': true,
+            'calendar_status': 'available',
+          }),
+          200,
+        );
+      }),
+    );
+    final coordinator = PrivacyIntelligenceCoordinator(client: client, store: store);
+
+    await coordinator.evaluateProactive(
+      timezone: 'America/Toronto',
+      now: DateTime(2026, 10, 13, 9),
+    );
+    final pending = await store.pendingCandidates();
+    expect(pending, hasLength(1));
+    expect(pending.single.suggestedType, 'advice');
+
+    await store.dismissCandidate(pending.single.candidateId);
+    await coordinator.evaluateProactive(
+      timezone: 'America/Toronto',
+      now: DateTime(2026, 10, 13, 9),
+    );
+
+    expect(calls, 2);
+    expect(await store.pendingCandidates(), isEmpty);
+    expect(await store.tasks(), hasLength(1));
+  });
+
   test('calendar prepare and confirm remain separate single calls', () async {
     final directory = await Directory.systemTemp.createTemp('privacy-coordinator-calendar');
     final store = await PrivacyStore.open(directory);

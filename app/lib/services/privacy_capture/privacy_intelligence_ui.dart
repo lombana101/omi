@@ -249,7 +249,17 @@ class _PrivacyAssistantTabState extends State<PrivacyAssistantTab> {
 
   Future<void> _refreshCalendar({bool silent = false}) async {
     await _run(
-      () => _loadCalendar(silent: silent),
+      () async {
+        final coordinator = _coordinator;
+        if (coordinator != null) {
+          await coordinator.evaluateProactive(
+            timezone: await (widget.timezoneLoader ?? _privacyTimezone)(),
+            now: widget.now,
+          );
+          await widget.onChanged();
+        }
+        await _loadCalendar(silent: silent);
+      },
       silent: silent,
     );
   }

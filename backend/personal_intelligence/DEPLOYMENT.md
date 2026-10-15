@@ -81,12 +81,17 @@ schema endpoints are disabled. Useful authenticated endpoints are:
 | `GET /v1/timetree/calendars` | Authenticate and list calendars |
 | `GET /v1/timetree/events` | Read/search calendar events |
 | `POST /v1/intelligence/extract` | Validate structured suggestions from authorized owner text |
+| `POST /v1/intelligence/proactive/evaluate` | Evaluate a minimized open-task snapshot for deadline risk; read-only |
 | `POST /v1/assistant` | Answer using supplied local-task context and configured integrations |
 | `POST /v1/timetree/operations/prepare` | Persist an exact write preview; does not write to TimeTree |
 | `POST /v1/timetree/operations/confirm` | Execute only a previously prepared, unexpired operation |
 
 Calendar writes are never part of the smoke test. Live create/update/delete
 validation requires separate explicit approval.
+
+The intelligent-commitments change adds no environment variable and requires no
+SQLite migration. The existing database remains the calendar-operation journal;
+the iPhone privacy store remains authoritative for tasks and suggestions.
 
 ## Ubuntu environment
 

@@ -71,6 +71,14 @@ def _assistant_body() -> dict[str, Any]:
     }
 
 
+def _proactive_body() -> dict[str, Any]:
+    return {
+        'timezone': 'America/Toronto',
+        'now': '2026-11-02T09:00:00-05:00',
+        'open_tasks': [],
+    }
+
+
 def _calendar_operation_body() -> dict[str, Any]:
     return {
         'kind': 'create',
@@ -119,6 +127,7 @@ def test_health_is_unauthenticated_but_every_v1_route_requires_both_owner_creden
             ('GET', '/v1/timetree/calendars', None),
             ('GET', '/v1/timetree/events', None),
             ('POST', '/v1/intelligence/extract', _extraction_body()),
+            ('POST', '/v1/intelligence/proactive/evaluate', _proactive_body()),
             ('POST', '/v1/assistant', _assistant_body()),
             ('POST', '/v1/timetree/operations/prepare', _calendar_operation_body()),
             ('POST', '/v1/timetree/operations/confirm', {'operation_id': '0' * 32}),

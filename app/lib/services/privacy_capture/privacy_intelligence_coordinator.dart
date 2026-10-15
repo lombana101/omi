@@ -27,22 +27,7 @@ class PrivacyIntelligenceCoordinator {
     required String timezone,
     required DateTime now,
   }) async {
-    final tasks = await store.tasks();
-    final projects = await store.projects();
-    final projectNames = <String, String>{for (final project in projects) project.projectId: project.name};
-    final context = tasks
-        .where((task) => task.isOpen)
-        .map(
-          (task) => PrivacyIntelligenceLocalTaskContext(
-            taskId: task.taskId,
-            title: task.title,
-            dueAt: task.dueAt,
-            projectName: task.projectId == null ? null : projectNames[task.projectId],
-            inToday: privacyTaskSelectedToday(task, now),
-          ),
-        )
-        .take(250)
-        .toList(growable: false);
+    final context = await _openTaskContext(now);
     final response = await client.assistant(
       PrivacyIntelligenceAssistantRequest(
         message: message,
@@ -55,6 +40,41 @@ class PrivacyIntelligenceCoordinator {
       await _persistSuggestion(suggestion);
     }
     return response;
+  }
+
+  Future<int> evaluateProactive({required String timezone, required DateTime now}) async {
+    final response = await client.evaluateProactive(
+      PrivacyIntelligenceProactiveEvaluationRequest(
+        timezone: timezone,
+        now: now,
+        openTasks: await _openTaskContext(now),
+      ),
+    );
+    var saved = 0;
+    for (final suggestion in response.suggestions) {
+      final result = await _persistSuggestion(suggestion);
+      if (result.ok && result.value?.status == 'pending') saved++;
+    }
+    return saved;
+  }
+
+  Future<List<PrivacyIntelligenceLocalTaskContext>> _openTaskContext(DateTime now) async {
+    final tasks = await store.tasks();
+    final projects = await store.projects();
+    final projectNames = <String, String>{for (final project in projects) project.projectId: project.name};
+    return tasks
+        .where((task) => task.isOpen)
+        .map(
+          (task) => PrivacyIntelligenceLocalTaskContext(
+            taskId: task.taskId,
+            title: task.title,
+            dueAt: task.dueAt,
+            projectName: task.projectId == null ? null : projectNames[task.projectId],
+            inToday: privacyTaskSelectedToday(task, now),
+          ),
+        )
+        .take(250)
+        .toList(growable: false);
   }
 
   Future<int> extract({

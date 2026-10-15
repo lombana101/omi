@@ -139,6 +139,22 @@ class PrivacyIntelligenceClient {
     return _decode('assistant', () => PrivacyIntelligenceAssistantResponse.fromJson(json));
   }
 
+  Future<PrivacyIntelligenceProactiveEvaluationResponse> evaluateProactive(
+    PrivacyIntelligenceProactiveEvaluationRequest request,
+  ) async {
+    final json = await _objectRequest(
+      operation: 'evaluate_proactive',
+      method: 'POST',
+      path: '/v1/intelligence/proactive/evaluate',
+      body: request.toJson(),
+      timeout: timeouts.read,
+    );
+    return _decode(
+      'evaluate_proactive',
+      () => PrivacyIntelligenceProactiveEvaluationResponse.fromJson(json),
+    );
+  }
+
   /// Creates a server-side preview only. This never writes to TimeTree.
   /// The caller must render the returned exact preview and obtain explicit
   /// confirmation before invoking [confirmCalendarOperation].

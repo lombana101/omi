@@ -15,6 +15,7 @@ class SuggestionType(StrEnum):
     PROJECT = 'project'
     HABIT = 'habit'
     INTENTION = 'intention'
+    ADVICE = 'advice'
 
 
 class StructuredSuggestion(BaseModel):
@@ -328,6 +329,39 @@ class AssistantRequest(BaseModel):
         if value.tzinfo is None:
             raise ValueError('now must include a timezone')
         return value
+
+
+class ProactiveEvaluationRequest(BaseModel):
+    """A minimized task snapshot used for one owner-triggered evaluation."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    timezone: str = Field(min_length=1, max_length=64)
+    now: datetime
+    open_tasks: list[LocalTaskContext] = Field(default_factory=list, max_length=250)
+
+    @field_validator('timezone')
+    @classmethod
+    def valid_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError('timezone must be an IANA timezone') from exc
+        return value
+
+    @field_validator('now')
+    @classmethod
+    def aware_now(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError('now must include a timezone')
+        return value
+
+
+class ProactiveEvaluationResponse(BaseModel):
+    suggestions: list[StructuredSuggestion] = Field(default_factory=list)
+    used_local_tasks: bool = True
+    used_timetree: bool = False
+    calendar_status: Literal['not_configured', 'available', 'unavailable'] = 'not_configured'
 
 
 class CalendarWriteProposal(BaseModel):

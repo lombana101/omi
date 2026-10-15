@@ -1,6 +1,6 @@
 # Personal Intelligence V1.1 status
 
-Snapshot date: 2026-10-14. This matrix distinguishes implementation from live
+Snapshot date: 2026-10-15. This matrix distinguishes implementation from live
 deployment. A checked-in file or passing mocked test is not evidence that the
 Ubuntu service or iOS-to-server path is live.
 
@@ -11,6 +11,7 @@ Ubuntu service or iOS-to-server path is live.
 | TimeTree create/update/delete with preview and confirmation | Yes, in this branch | Yes; mocked HTTP and service tests pass | Mocked only | No | No | Destructive live test requires explicit approval |
 | SQLite idempotency and uncertain-write handling | Yes, in this branch | Yes; filesystem and restart-state tests pass | Mocked only | No | No | Live filesystem/service lifecycle not exercised |
 | Local Ollama extraction and assistant planning | Yes, in this branch | Yes; structured-output and service tests pass | Mocked only | No | No | Ubuntu model name and live structured output not verified |
+| Intelligent commitments and proactive deadline risk | Yes, in this branch | Yes; deterministic routing, busy-calendar, provider-unavailable, and stable-source tests pass | Mocked only | No | No | Current Ubuntu release still needs this commit deployed and verified |
 | Ubuntu systemd/env/release/rollback artifacts | Yes, in this branch | Local shell/config/pin/isolation checks passed | No | No | No | `systemd-analyze verify` still requires Ubuntu; artifacts deliberately not installed |
 | Read-only TimeTree authentication smoke test | Yes, in this branch | Synthetic success, disabled, and error-redaction checks passed | Mocked only | No | No | Live run requires deployed service and server-side credentials |
 | Tailscale private API route on `:8444` | Proposal only | N/A | No | No | No | Requires current-config inspection and explicit approval |
@@ -19,13 +20,13 @@ Ubuntu service or iOS-to-server path is live.
 | Existing privacy STT `127.0.0.1:8766` and TLS `:8443/live` | Preserved | Existing coverage only | Not rerun here | Existing service reported active | Existing capture previously verified | No file, service, or route change made by this work |
 | Existing Ubuntu context app / `pis-backend` suitability | Keep separate for this release | N/A | On-host read-only audit pending | Existing deployment unknown | No | No verified extension contract or safe noninteractive SSH credential; deployment runbook requires a collision/lifecycle audit |
 
-Backend verification on 2026-10-14: the three dedicated suites completed with
-`78 passed` using the repository Python 3.11 environment. The repository-pinned
+Backend verification on 2026-10-15: the three dedicated suites completed with
+`85 passed` in an isolated Python environment. The repository-pinned
 Black 26.5.1 formatter and Ruff 0.4.4 passed for the package and its tests;
-bytecode compilation, shell syntax,
-the import-time side-effect scanner, and installed-package compatibility checks
-also passed. These are local and mocked checks only, not Ubuntu deployment or
-provider evidence.
+bytecode compilation also passed. The repository-wide bootstrap, Flutter tests,
+import-time side-effect scanner, shell checks, and installed-package compatibility
+checks were not rerun in this sparse Ubuntu checkout. These are local and mocked
+checks only, not Ubuntu deployment or provider evidence.
 
 iOS verification on 2026-10-14: the 26 focused Personal Intelligence unit and
 widget tests passed, focused analysis reported no issues, and a signed profile

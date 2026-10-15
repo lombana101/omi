@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from datetime import UTC, datetime, timedelta
+import re
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -18,6 +19,11 @@ from personal_intelligence.models import (
     CalendarWriteProposal,
     ExtractionRequest,
     ExtractionResponse,
+    LocalTaskContext,
+    ProactiveEvaluationRequest,
+    ProactiveEvaluationResponse,
+    StructuredSuggestion,
+    SuggestionType,
     TimeTreeCalendar,
     TimeTreeEvent,
 )
@@ -134,6 +140,8 @@ class PersonalIntelligenceService:
             excerpt = ' '.join(suggestion.supporting_excerpt.split())
             if excerpt.casefold() not in source_text:
                 continue
+            if self._reject_non_commitment(suggestion, excerpt):
+                continue
             normalized = (
                 suggestion.suggested_type.value,
                 ' '.join(suggestion.title.split()).casefold(),
@@ -152,6 +160,34 @@ class PersonalIntelligenceService:
                 )
             )
         return ExtractionResponse(suggestions=result, extractor='ollama-structured-v1')
+
+    @staticmethod
+    def _reject_non_commitment(suggestion: StructuredSuggestion, excerpt: str) -> bool:
+        normalized = excerpt.casefold().strip(' \t\r\n"“”\'')
+        hypothetical_prefixes = (
+            'if i ',
+            'maybe i ',
+            'suppose i ',
+            'what if i ',
+            'i might ',
+            'i could ',
+            'i would ',
+        )
+        if normalized.startswith(hypothetical_prefixes):
+            return True
+        if suggestion.suggested_type not in {
+            SuggestionType.TASK,
+            SuggestionType.COMMITMENT,
+            SuggestionType.INTENTION,
+        }:
+            return False
+        return (
+            re.match(
+                r"^i(?:'ve| have)?\s+(?:already\s+)?(?:finished|completed|done|sent|submitted|fixed|resolved)\b",
+                normalized,
+            )
+            is not None
+        )
 
     @staticmethod
     def _validate_authorization_basis(request: ExtractionRequest) -> None:
@@ -333,6 +369,8 @@ class PersonalIntelligenceService:
             )
 
     async def assistant(self, request: AssistantRequest) -> AssistantResponse:
+        if self._is_tomorrow_focus_query(request.message):
+            return await self._tomorrow_answer(request)
         plan = await self._intelligence_client().plan_assistant(
             message=request.message,
             timezone=request.timezone,
@@ -356,6 +394,8 @@ class PersonalIntelligenceService:
                     }
                 )
             return task_answer
+        if plan.action == AssistantAction.TOMORROW_QUERY:
+            return await self._tomorrow_answer(request)
         if plan.action == AssistantAction.CALENDAR_READ:
             if not self._calendar_allowed(plan):
                 return AssistantResponse(
@@ -401,6 +441,129 @@ class PersonalIntelligenceService:
         }:
             return await self._calendar_proposal(plan)
         return AssistantResponse(message=plan.response or 'I do not have enough information to answer that.')
+
+    @staticmethod
+    def _is_tomorrow_focus_query(message: str) -> bool:
+        normalized = ' '.join(message.casefold().split())
+        return 'tomorrow' in normalized and any(
+            phrase in normalized for phrase in ('focus', 'prioritize', 'priority', 'work on')
+        )
+
+    async def evaluate_proactive(self, request: ProactiveEvaluationRequest) -> ProactiveEvaluationResponse:
+        """Find a small number of deterministic, reviewable deadline risks.
+
+        The caller remains the task source of truth. No task or calendar write is
+        performed, and no LLM is involved in this path.
+        """
+        zone = ZoneInfo(request.timezone)
+        local_now = request.now.astimezone(zone)
+        tomorrow = local_now.date() + timedelta(days=1)
+        due_tomorrow = sorted(
+            (
+                task
+                for task in request.open_tasks
+                if task.due_at is not None and task.due_at.astimezone(zone).date() == tomorrow
+            ),
+            key=lambda task: (task.due_at or request.now, task.task_id),
+        )
+        if not due_tomorrow:
+            return ProactiveEvaluationResponse()
+
+        events: list[TimeTreeEvent] = []
+        calendar_status = 'not_configured'
+        if self._timetree is not None:
+            start = datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=zone)
+            try:
+                events = await self.search_events(start_at=start, end_at=start + timedelta(days=1))
+                calendar_status = 'available'
+            except TimeTreeError:
+                calendar_status = 'unavailable'
+
+        busy_minutes = self._busy_minutes(events, zone)
+        busy = len(events) >= 3 or busy_minutes >= 240
+        suggestions = [self._deadline_suggestion(task, tomorrow, busy=busy) for task in due_tomorrow[:3]]
+        return ProactiveEvaluationResponse(
+            suggestions=suggestions,
+            used_timetree=calendar_status == 'available',
+            calendar_status=calendar_status,
+        )
+
+    async def _tomorrow_answer(self, request: AssistantRequest) -> AssistantResponse:
+        zone = ZoneInfo(request.timezone)
+        local_now = request.now.astimezone(zone)
+        tomorrow = local_now.date() + timedelta(days=1)
+        tasks = [
+            task
+            for task in request.open_tasks
+            if task.in_today or (task.due_at is not None and task.due_at.astimezone(zone).date() <= tomorrow)
+        ]
+        tasks.sort(key=lambda task: (task.due_at is None, task.due_at or request.now, task.task_id))
+        events: list[TimeTreeEvent] = []
+        used_timetree = False
+        calendar_unavailable = False
+        if self._settings.timetree_prefer_for_generic_calendar and self._timetree is not None:
+            start = datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=zone)
+            try:
+                events = await self.search_events(start_at=start, end_at=start + timedelta(days=1))
+                used_timetree = True
+            except TimeTreeError:
+                calendar_unavailable = True
+        if tasks:
+            focus = tasks[0]
+            project = f' for {focus.project_name}' if focus.project_name else ''
+            message = f'Prioritize {focus.title}{project}.'
+            if used_timetree:
+                if self._busy_minutes(events, zone) >= 240 or len(events) >= 3:
+                    message += ' Tomorrow is calendar-heavy, so protect time before then.'
+                elif events:
+                    message += (
+                        f' You also have {len(events)} calendar commitment{"s" if len(events) != 1 else ""} tomorrow.'
+                    )
+                else:
+                    message += ' Your TimeTree calendar is clear tomorrow.'
+            elif calendar_unavailable:
+                message += ' TimeTree is unavailable, so this recommendation uses tasks only.'
+        elif used_timetree and events:
+            message = f'No task deadline stands out; plan around {events[0].title}.'
+        else:
+            message = 'No open task deadline stands out for tomorrow.'
+        return AssistantResponse(
+            message=message,
+            events=events,
+            used_local_tasks=True,
+            used_timetree=used_timetree,
+        )
+
+    @staticmethod
+    def _busy_minutes(events: list[TimeTreeEvent], zone: ZoneInfo) -> int:
+        total = timedelta()
+        for event in events:
+            if event.all_day:
+                total += timedelta(hours=8)
+                continue
+            start = event.start_at.astimezone(zone)
+            end = event.end_at.astimezone(zone)
+            if end > start:
+                total += end - start
+        return int(total.total_seconds() // 60)
+
+    @staticmethod
+    def _deadline_suggestion(task: LocalTaskContext, due_date: date, *, busy: bool) -> StructuredSuggestion:
+        project = f' in {task.project_name}' if task.project_name else ''
+        description = f'{task.title}{project} is due tomorrow.'
+        if busy:
+            description += ' Your TimeTree calendar is fairly full, so consider protecting time today.'
+        else:
+            description += ' Consider deciding when you will finish it.'
+        return StructuredSuggestion(
+            suggested_type=SuggestionType.ADVICE,
+            title=f'Plan for {task.title}',
+            description=description,
+            proposed_time_text='today',
+            source_ref=f'proactive:deadline:{due_date}:{task.task_id}',
+            supporting_excerpt=task.title,
+            uncertainty=0.0,
+        )
 
     def _calendar_allowed(self, plan: AssistantPlan) -> bool:
         return plan.explicit_timetree or self._settings.timetree_prefer_for_generic_calendar

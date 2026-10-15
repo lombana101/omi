@@ -29,6 +29,7 @@ class AssistantAction(StrEnum):
     ANSWER = 'answer'
     TASK_QUERY = 'task_query'
     TODAY_QUERY = 'today_query'
+    TOMORROW_QUERY = 'tomorrow_query'
     CALENDAR_READ = 'calendar_read'
     TASK_SUGGESTION = 'task_suggestion'
     CALENDAR_CREATE = 'calendar_create'
@@ -175,8 +176,9 @@ class OllamaIntelligenceClient:
         tasks: list[LocalTaskContext],
     ) -> AssistantPlan:
         system = (
-            'Plan one safe action for a personal assistant. Use task_query or today_query for questions about the '
-            'provided local tasks; never invent tasks. Use calendar_read for calendar questions. Set explicit_timetree '
+            'Plan one safe action for a personal assistant. Use task_query, today_query, or tomorrow_query for questions '
+            'about the provided local tasks; never invent tasks. Use tomorrow_query for prioritization questions about '
+            'tomorrow. Use calendar_read for calendar questions. Set explicit_timetree '
             'only when the user explicitly says TimeTree. Calendar create/update/delete are proposals only and must '
             'contain the requested data without claiming success. If a date or target is ambiguous, use answer and ask '
             'one concise question. For update/delete, provide event_uuid only if the user supplied it; otherwise provide '

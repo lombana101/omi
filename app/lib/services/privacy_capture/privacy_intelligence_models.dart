@@ -4,7 +4,8 @@ enum PrivacyIntelligenceSuggestionType {
   commitment('commitment'),
   project('project'),
   habit('habit'),
-  intention('intention');
+  intention('intention'),
+  advice('advice');
 
   const PrivacyIntelligenceSuggestionType(this.wireName);
   final String wireName;
@@ -334,6 +335,56 @@ class PrivacyIntelligenceAssistantRequest {
         'now': _wireDateTime(now),
         'open_tasks': openTasks.map((task) => task.toJson()).toList(growable: false),
       };
+}
+
+class PrivacyIntelligenceProactiveEvaluationRequest {
+  PrivacyIntelligenceProactiveEvaluationRequest({
+    required this.timezone,
+    required this.now,
+    List<PrivacyIntelligenceLocalTaskContext> openTasks = const [],
+  }) : openTasks = List<PrivacyIntelligenceLocalTaskContext>.unmodifiable(openTasks) {
+    _requireBoundedText(timezone, 'timezone', 64);
+    if (openTasks.length > 250) throw ArgumentError.value(openTasks.length, 'openTasks', 'must not exceed 250');
+  }
+
+  final String timezone;
+  final DateTime now;
+  final List<PrivacyIntelligenceLocalTaskContext> openTasks;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+        'timezone': timezone,
+        'now': _wireDateTime(now),
+        'open_tasks': openTasks.map((task) => task.toJson()).toList(growable: false),
+      };
+}
+
+class PrivacyIntelligenceProactiveEvaluationResponse {
+  PrivacyIntelligenceProactiveEvaluationResponse({
+    required List<PrivacyIntelligenceStructuredSuggestion> suggestions,
+    required this.usedLocalTasks,
+    required this.usedTimeTree,
+    required this.calendarStatus,
+  }) : suggestions = List<PrivacyIntelligenceStructuredSuggestion>.unmodifiable(suggestions) {
+    if (!const {'not_configured', 'available', 'unavailable'}.contains(calendarStatus)) {
+      throw const FormatException('invalid field: calendar_status');
+    }
+  }
+
+  final List<PrivacyIntelligenceStructuredSuggestion> suggestions;
+  final bool usedLocalTasks;
+  final bool usedTimeTree;
+  final String calendarStatus;
+
+  factory PrivacyIntelligenceProactiveEvaluationResponse.fromJson(Map<String, Object?> json) {
+    return PrivacyIntelligenceProactiveEvaluationResponse(
+      suggestions: _requiredObjectList(json, 'suggestions')
+          .map(PrivacyIntelligenceStructuredSuggestion.fromJson)
+          .toList(growable: false),
+      usedLocalTasks: _requiredBool(json, 'used_local_tasks'),
+      usedTimeTree: _requiredBool(json, 'used_timetree'),
+      calendarStatus: _requiredString(json, 'calendar_status'),
+    );
+  }
 }
 
 class PrivacyIntelligenceCalendarEventDraft {

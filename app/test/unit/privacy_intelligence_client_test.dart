@@ -60,6 +60,21 @@ void main() {
             'used_local_tasks': true,
             'used_timetree': true,
           });
+        case '/pis/v1/intelligence/proactive/evaluate':
+          final body = _body(request);
+          expect((body['open_tasks'] as List).single, containsPair('task_id', 'task_1'));
+          return _json(<String, Object?>{
+            'suggestions': <Object?>[
+              <String, Object?>{
+                ..._suggestionJson(),
+                'suggested_type': 'advice',
+                'source_ref': 'proactive:deadline:2026-10-14:task_1',
+              },
+            ],
+            'used_local_tasks': true,
+            'used_timetree': true,
+            'calendar_status': 'available',
+          });
         case '/pis/v1/timetree/operations/prepare':
           final body = _body(request);
           expect(body['idempotency_key'], 'request_12345678');
@@ -132,6 +147,18 @@ void main() {
     expect(assistant.usedTimeTree, isTrue);
     expect(assistant.events.single.calendarId, 'calendar_1');
 
+    final proactive = await client.evaluateProactive(
+      PrivacyIntelligenceProactiveEvaluationRequest(
+        timezone: 'America/Toronto',
+        now: DateTime.utc(2026, 10, 13, 16),
+        openTasks: <PrivacyIntelligenceLocalTaskContext>[
+          PrivacyIntelligenceLocalTaskContext(taskId: 'task_1', title: 'Call dentist'),
+        ],
+      ),
+    );
+    expect(proactive.suggestions.single.suggestedType, PrivacyIntelligenceSuggestionType.advice);
+    expect(proactive.calendarStatus, 'available');
+
     final prepare = PrivacyIntelligenceCalendarOperationRequest(
       kind: PrivacyIntelligenceCalendarOperationKind.create,
       idempotencyKey: 'request_12345678',
@@ -150,8 +177,8 @@ void main() {
     final reconciled = await client.calendarOperationStatus(_operationId);
     expect(reconciled.status, PrivacyIntelligenceOperationStatus.succeeded);
 
-    expect(requests, hasLength(8));
-    expect(requests.where((request) => request.method == 'POST'), hasLength(4));
+    expect(requests, hasLength(9));
+    expect(requests.where((request) => request.method == 'POST'), hasLength(5));
   });
 
   test('confirm write is attempted exactly once on server failure', () async {

@@ -24,6 +24,7 @@ from personal_intelligence.models import (
     CalendarWriteProposal,
     ExtractionRequest,
     LocalTaskContext,
+    ProactiveEvaluationRequest,
     StructuredSuggestion,
     SuggestionType,
     TimeTreeCalendar,
@@ -258,6 +259,78 @@ async def test_extraction_accepts_consent_and_deduplicates_only_supported_sugges
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('text', 'suggested_type'),
+    [
+        ('If I had more time, I would finish the deck.', SuggestionType.COMMITMENT),
+        ('I might finish the deck next week.', SuggestionType.INTENTION),
+        ('I already finished the deck.', SuggestionType.TASK),
+        ('I have submitted the report.', SuggestionType.COMMITMENT),
+    ],
+)
+async def test_extraction_rejects_hypothetical_or_completed_future_commitments(
+    tmp_path: Path,
+    text: str,
+    suggested_type: SuggestionType,
+) -> None:
+    intelligence = _FakeIntelligence(
+        suggestions=[
+            StructuredSuggestion(
+                suggested_type=suggested_type,
+                title='Finish the deck',
+                source_ref='provider-ref',
+                supporting_excerpt=text,
+                uncertainty=0.1,
+            )
+        ]
+    )
+    service, _ = await _service(tmp_path, intelligence=intelligence)
+    request = ExtractionRequest(
+        source_ref='owner-note-1',
+        source_kind='owner_note',
+        authorization_basis='self_only',
+        text=text,
+        timezone='America/Toronto',
+        now=NOW,
+    )
+
+    response = await service.extract(request)
+
+    assert response.suggestions == []
+
+
+@pytest.mark.asyncio
+async def test_completed_statement_can_remain_reviewable_project_progress(tmp_path: Path) -> None:
+    text = 'I finally got the TimeTree integration working.'
+    intelligence = _FakeIntelligence(
+        suggestions=[
+            StructuredSuggestion(
+                suggested_type=SuggestionType.PROJECT,
+                title='TimeTree integration is working',
+                source_ref='provider-ref',
+                supporting_excerpt=text,
+                uncertainty=0.2,
+            )
+        ]
+    )
+    service, _ = await _service(tmp_path, intelligence=intelligence)
+
+    response = await service.extract(
+        ExtractionRequest(
+            source_ref='owner-note-2',
+            source_kind='owner_note',
+            authorization_basis='self_only',
+            text=text,
+            timezone='America/Toronto',
+            now=NOW,
+        )
+    )
+
+    assert response.suggestions[0].suggested_type == SuggestionType.PROJECT
+    assert response.suggestions[0].review_state == 'pending'
+
+
+@pytest.mark.asyncio
 async def test_provider_unavailable_and_disabled_integrations_fail_closed(tmp_path: Path) -> None:
     failure = IntelligenceUnavailableError('local provider secret detail')
     intelligence = _FakeIntelligence(failure=failure)
@@ -442,6 +515,93 @@ async def test_assistant_calendar_write_is_only_a_proposal_and_tasks_come_from_s
     assert task_response.message == 'Open tasks: Ship the deck; Email Sam'
     assert 'upload secrets' not in task_response.message
     assert task_response.used_local_tasks is True
+
+
+@pytest.mark.asyncio
+async def test_tomorrow_focus_combines_task_deadlines_and_busy_timetree_context(tmp_path: Path) -> None:
+    zone = ZoneInfo('America/Toronto')
+    tomorrow_start = datetime(2026, 11, 3, 0, 0, tzinfo=zone)
+    timetree = _FakeTimeTree()
+    timetree.events = [
+        _event(title=f'Event {index}').model_copy(
+            update={
+                'uuid': f'event_{index}',
+                'start_at': tomorrow_start + timedelta(hours=8 + index * 2),
+                'end_at': tomorrow_start + timedelta(hours=10 + index * 2),
+            }
+        )
+        for index in range(3)
+    ]
+    intelligence = _FakeIntelligence(plan=AssistantPlan(action=AssistantAction.TOMORROW_QUERY))
+    settings = _settings(
+        tmp_path / 'state' / 'operations.sqlite3',
+        timetree_prefer_for_generic_calendar=True,
+    )
+    service, _ = await _service(tmp_path, timetree=timetree, intelligence=intelligence, settings=settings)
+    request = AssistantRequest(
+        message='What should I prioritize tomorrow?',
+        timezone='America/Toronto',
+        now=NOW,
+        open_tasks=[
+            LocalTaskContext(
+                task_id='memoria-1',
+                title='Finish Memoria improvements',
+                due_at=tomorrow_start + timedelta(hours=17),
+                project_name='Memoria',
+            )
+        ],
+    )
+
+    response = await service.assistant(request)
+
+    assert response.used_local_tasks is True
+    assert response.used_timetree is True
+    assert response.events == timetree.events
+    assert response.message == (
+        'Prioritize Finish Memoria improvements for Memoria. '
+        'Tomorrow is calendar-heavy, so protect time before then.'
+    )
+    assert intelligence.plan_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_proactive_evaluation_is_deterministic_and_degrades_when_calendar_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    zone = ZoneInfo('America/Toronto')
+    due_at = datetime(2026, 11, 3, 17, 0, tzinfo=zone)
+    request = ProactiveEvaluationRequest(
+        timezone='America/Toronto',
+        now=NOW,
+        open_tasks=[
+            LocalTaskContext(
+                task_id='memoria-1',
+                title='Finish Memoria improvements',
+                due_at=due_at,
+                project_name='Memoria',
+            )
+        ],
+    )
+    timetree = _FakeTimeTree()
+
+    async def unavailable(_calendar_id: str) -> list[TimeTreeEvent]:
+        raise TimeTreeError('private provider detail')
+
+    timetree.list_events = unavailable  # type: ignore[method-assign]
+    service, _ = await _service(tmp_path, timetree=timetree, intelligence=_FakeIntelligence())
+
+    first = await service.evaluate_proactive(request)
+    second = await service.evaluate_proactive(request)
+
+    assert first == second
+    assert first.calendar_status == 'unavailable'
+    assert first.used_timetree is False
+    assert len(first.suggestions) == 1
+    suggestion = first.suggestions[0]
+    assert suggestion.suggested_type == SuggestionType.ADVICE
+    assert suggestion.source_ref == 'proactive:deadline:2026-11-03:memoria-1'
+    assert suggestion.supporting_excerpt == 'Finish Memoria improvements'
+    assert suggestion.uncertainty == 0
 
 
 @pytest.mark.parametrize(

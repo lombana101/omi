@@ -73,6 +73,17 @@ void main() {
     var confirmCalls = 0;
     var eventReads = 0;
     final httpClient = MockClient((request) async {
+      if (request.url.path.endsWith('/intelligence/proactive/evaluate')) {
+        return http.Response(
+          jsonEncode(<String, Object?>{
+            'suggestions': <Object?>[],
+            'used_local_tasks': true,
+            'used_timetree': true,
+            'calendar_status': 'available',
+          }),
+          200,
+        );
+      }
       if (request.method == 'GET' && request.url.path.endsWith('/calendars')) {
         return http.Response(
             jsonEncode(<Object?>[

@@ -23,6 +23,8 @@ from personal_intelligence.models import (
     CalendarOperationRequest,
     ExtractionRequest,
     ExtractionResponse,
+    ProactiveEvaluationRequest,
+    ProactiveEvaluationResponse,
     TimeTreeCalendar,
     TimeTreeEvent,
 )
@@ -211,6 +213,13 @@ def create_app(
     async def extract_actions(body: ExtractionRequest, request: Request, _owner_uid: OwnerUid) -> ExtractionResponse:
         service: PersonalIntelligenceService = request.app.state.service
         return await service.extract(body)
+
+    @application.post('/v1/intelligence/proactive/evaluate', response_model=ProactiveEvaluationResponse)
+    async def evaluate_proactive(
+        body: ProactiveEvaluationRequest, request: Request, _owner_uid: OwnerUid
+    ) -> ProactiveEvaluationResponse:
+        service: PersonalIntelligenceService = request.app.state.service
+        return await service.evaluate_proactive(body)
 
     @application.post('/v1/assistant', response_model=AssistantResponse)
     async def assistant(body: AssistantRequest, request: Request, _owner_uid: OwnerUid) -> AssistantResponse:
