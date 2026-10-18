@@ -2,6 +2,12 @@
 
 This README provides a quick setup guide for the Omi backend. For a comprehensive step-by-step guide with detailed explanations, please refer to the [Backend Setup Documentation](https://docs.omi.me/doc/developer/backend/Backend_Setup).
 
+The standalone Personal Intelligence API has a smaller, private local runtime.
+To develop or test that service on a MacBook, follow the
+[Personal Intelligence Mac guide](personal_intelligence/LOCAL_DEVELOPMENT.md).
+Its Ubuntu deployment and rollback procedure is documented separately in the
+[Personal Intelligence deployment runbook](personal_intelligence/DEPLOYMENT.md).
+
 ## Quick Setup Steps
 
 1. Install the google-cloud-sdk
