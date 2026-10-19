@@ -198,3 +198,53 @@ For the Ubuntu service lifecycle, private tailnet route, rollback, and the
 redaction-safe TimeTree smoke test, use [DEPLOYMENT.md](DEPLOYMENT.md). The
 implementation-versus-deployment evidence remains tracked in
 [STATUS.md](STATUS.md).
+
+## Privacy app on the same Mac
+
+Run the dedicated scheme and entrypoint from `app/`:
+
+```bash
+OMI_IOS_DEVICE_ID=<available-simulator-id> bash setup.sh ios privacy
+```
+
+The explicit `privacy` argument keeps the ordinary `ios` development and `ios beta`
+paths separate. The privacy scheme has Debug/Profile/Release configurations for
+Runner and its embedded products; use Debug for a simulator. For simulator UUIDs,
+the wrapper also opts into `OMI_PRIVACY_SIMULATOR_STORAGE=true`. The simulator
+cannot attest iPhone data protection, so this flag permits local test storage only
+in a DEBUG simulator binary, still requiring backup exclusion. Use synthetic data
+on the simulator. Physical-device and release binaries continue to require the
+original iOS data-protection verification regardless of this flag. Direct simulator
+launches must explicitly pass that define; it defaults off.
+
+In the app's Personal Intelligence settings, configure `http://127.0.0.1:8792`
+and the same protected owner ID and token as the local API. A simulator shares
+Mac loopback; a physical iPhone requires a separately configured private HTTPS
+route to the Mac. Its own localhost does not address the Mac.
+
+“Reprocess interrupted session” sends retained transcript text (including saved
+corrections) and owner notes through the authenticated intelligence extraction
+API. It does not retranscribe missing audio. Results remain pending suggestions
+in the phone's local store. Missing configuration or backend unavailability must
+not erase the retained source, accepted tasks, or dismissed-candidate tombstones.
+Both explicit intelligence extraction gestures use the same session source ref.
+
+The Ollama structured-output request explicitly disables thinking. The configured
+model must support `think: false`; the verified `gemma4:latest` installation reports
+that capability. Default reasoning on that model exceeded the interactive client
+budget during the simulator reproduction. The client and backend deadlines stay
+bounded rather than relying on an extended request timeout.
+
+An opt-in simulator test uses only synthetic data and a real local model:
+
+```bash
+flutter test integration_test/privacy_session_reprocessing_live_test.dart \
+  --flavor privacy --dart-define=OMI_PRIVACY_CAPTURE=true \
+  --dart-define-from-file=/absolute/path/to/private-test-defines.json \
+  -d <available-simulator-id>
+```
+
+Create the private, untracked defines file with `PIS_LIVE_TEST` set to true,
+`PIS_TEST_OWNER`, and `PIS_TEST_TOKEN` matching the local service. Protect that
+file like the local environment file. Never commit it. Without the opt-in flag,
+the test is skipped and does not contact the local service.

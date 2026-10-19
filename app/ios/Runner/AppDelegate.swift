@@ -525,8 +525,11 @@ final class QuickActionsIconPatcher: NSObject {
             let attrs = try FileManager.default.attributesOfItem(atPath: path)
             let protection = attrs[.protectionKey] as? FileProtectionType
             let readBack = try url.resourceValues(forKeys: [.isExcludedFromBackupKey])
-            guard protection == .completeUntilFirstUserAuthentication,
-                  readBack.isExcludedFromBackup == true else {
+            guard privacyFileProtectionVerified(
+                dataProtectionVerified: protection == .completeUntilFirstUserAuthentication,
+                backupExcluded: readBack.isExcludedFromBackup == true,
+                allowSimulatorStorage: args["allow_simulator_storage"] as? Bool == true
+            ) else {
                 result(false)
                 return
             }

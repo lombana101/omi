@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "images": [
+    {
+      "file": "001-mobile-ios-reprocessing.png",
+      "platform": "mobile-ios",
+      "description": "Synthetic interrupted session reprocessing against the local API and Ollama in the iOS simulator",
+      "captured_by": "agent",
+      "source": "visual-audit"
+    },
+    {
+      "file": "002-mobile-ios-privacy-ready.png",
+      "platform": "mobile-ios",
+      "description": "Normal privacy entrypoint after explicit debug simulator storage opt-in; local store is available and recording remains off",
+      "captured_by": "agent",
+      "source": "visual-audit"
+    }
+  ]
+}

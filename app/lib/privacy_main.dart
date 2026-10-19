@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter/foundation.dart';
+import 'package:marionette_flutter/marionette_flutter.dart';
 import 'package:opus_dart/opus_dart.dart';
 import 'package:opus_flutter/opus_flutter.dart' as opus_flutter;
 
@@ -19,15 +21,27 @@ import 'package:omi/services/privacy_capture/privacy_standalone.dart';
 void main() {
   runZonedGuarded(
     () async {
-      WidgetsFlutterBinding.ensureInitialized();
+      if (kDebugMode) {
+        MarionetteBinding.ensureInitialized();
+      } else {
+        WidgetsFlutterBinding.ensureInitialized();
+      }
+      var bootStep = 'preferences';
       try {
         await SharedPreferencesUtil.init();
         await SharedPreferencesUtil().setCaptureMuted(true);
+        bootStep = 'opus';
         initOpus(await opus_flutter.load());
+        bootStep = 'native_bridge';
         BleFlutterApi.setUp(BleBridge.instance);
+        bootStep = 'device_runtime';
         PrivacyCaptureHost.startDeviceRuntime();
+        bootStep = 'local_store';
         await PrivacyCaptureHost.ensureReady();
-      } catch (_) {
+      } catch (error) {
+        if (kDebugMode) {
+          debugPrint('Privacy startup failed: $bootStep (${error.runtimeType})');
+        }
         PrivacyCaptureHost.bootError = PrivacyCopy.storeUnavailable;
       }
       runApp(const PrivacyStandaloneApp());

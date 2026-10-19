@@ -5,6 +5,9 @@ platform :ios, '15.0'
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
 
 project 'Runner', {
+  'Debug-privacy' => :debug,
+  'Profile-privacy' => :release,
+  'Release-privacy' => :release,
   'Debug-prod' => :debug,
   'Profile-prod' => :release,
   'Release-prod' => :release,

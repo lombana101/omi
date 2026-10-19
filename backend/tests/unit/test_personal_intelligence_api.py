@@ -400,6 +400,7 @@ async def test_ollama_request_is_loopback_structured_deterministic_and_non_strea
     assert captured['url'] == 'http://127.0.0.1:11434/api/chat'
     assert captured['body']['model'] == 'local-model'
     assert captured['body']['stream'] is False
+    assert captured['body']['think'] is False
     assert captured['body']['options'] == {'temperature': 0}
     assert captured['body']['format']['additionalProperties'] is False
 

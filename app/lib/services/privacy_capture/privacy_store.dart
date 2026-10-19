@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:omi/services/privacy_capture/privacy_action_config.dart';
@@ -43,6 +44,7 @@ class PrivacyStore {
     final store = PrivacyStore._(file, newId ?? _defaultId, protect ?? _noopProtect);
     try {
       await store._tx((doc) async {
+        _migrateCandidateFingerprints(doc);
         store._repairDuplicateTaskIds(doc);
         doc.diagnostics.add(PrivacyDiagnosticRecord(at: (now ?? DateTime.now)(), kind: 'store_open', state: 'off'));
         _trimDiagnostics(doc);
@@ -306,11 +308,15 @@ class PrivacyStore {
     String sessionId = '',
     String captureId = '',
     int sequence = 0,
+    bool requireSourceSession = false,
     String? description,
     String? proposedTimeText,
     DateTime? proposedStartAt,
     DateTime? proposedEndAt,
     String? timezone,
+    String extractionKind = 'structured_personal_action',
+    String extractionVersion = 'ollama-structured-v1',
+    String origin = 'intelligence_suggestion',
     DateTime? at,
   }) async {
     final trimmed = title.trim();
@@ -324,6 +330,10 @@ class PrivacyStore {
       proposedTimeText: proposedTimeText,
     );
     final created = await _tx((doc) async {
+      if (requireSourceSession &&
+          !doc.sessions.any((session) => session.localId == sessionId && session.captureId == captureId)) {
+        return null;
+      }
       final existing = doc.candidates.where((item) => item.fingerprint == fingerprint).toList();
       if (existing.isNotEmpty) return existing.first;
       final now = at ?? DateTime.now();
@@ -334,9 +344,9 @@ class PrivacyStore {
         sequence: sequence,
         proposedText: trimmed,
         excerpt: boundPrivacyExcerpt(excerpt),
-        extractionKind: 'structured_personal_action',
-        extractionVersion: 'ollama-structured-v1',
-        origin: 'intelligence_suggestion',
+        extractionKind: extractionKind,
+        extractionVersion: extractionVersion,
+        origin: origin,
         createdAt: now,
         expiresAt: now.add(PrivacyActionConfig.candidateTtl),
         suggestedType: suggestedType,
@@ -352,6 +362,7 @@ class PrivacyStore {
       doc.candidates.add(candidate);
       return candidate;
     });
+    if (created == null) return const PrivacyWriteResult.failed('source_unavailable');
     return PrivacyWriteResult.ok(created);
   }
 
@@ -382,7 +393,8 @@ class PrivacyStore {
         sourceKind: candidate.origin,
         excerpt: boundPrivacyExcerpt(candidate.excerpt),
         note: candidate.description,
-        dueAt: candidate.suggestedType == 'task' ? candidate.proposedStartAt : null,
+        dueAt: candidate.proposedStartAt,
+        projectId: _referencedProjectId(doc, candidate),
         createdAt: now,
         updatedAt: now,
       );
@@ -810,7 +822,12 @@ class PrivacyStore {
 
   Future<PrivacyDeletionPreview> previewAll() async {
     final doc = await _read();
-    return _preview(doc, sessionIds: doc.sessions.map((item) => item.localId).toSet(), includeDiagnostics: true);
+    return _preview(
+      doc,
+      sessionIds: doc.sessions.map((item) => item.localId).toSet(),
+      includeDiagnostics: true,
+      includeAllLocalRecords: true,
+    );
   }
 
   Future<PrivacyWriteResult<PrivacyReceiptRecord>> deleteSession(
@@ -830,10 +847,17 @@ class PrivacyStore {
   Future<PrivacyWriteResult<PrivacyReceiptRecord>> clearLocal({DateTime? at}) async {
     final receipt = await _tx((doc) async {
       final ids = doc.sessions.map((item) => item.localId).toSet();
-      final cleared = _deleteSessions(doc, ids,
-          deleteAcceptedTasks: true, scope: 'clear_local', at: at ?? DateTime.now(), clearDiagnostics: true);
+      final cleared = _deleteSessions(
+        doc,
+        ids,
+        deleteAcceptedTasks: true,
+        scope: 'clear_local',
+        at: at ?? DateTime.now(),
+        clearDiagnostics: true,
+        clearAllCandidates: true,
+        clearAllTasks: true,
+      );
       doc.projects.clear();
-      doc.tasks.clear();
       doc.habits.clear();
       doc.habitCompletions.clear();
       return cleared;
@@ -997,14 +1021,23 @@ class PrivacyStore {
     });
   }
 
-  static PrivacyDeletionPreview _preview(_Doc doc,
-      {required Set<String> sessionIds, required bool includeDiagnostics}) {
+  static PrivacyDeletionPreview _preview(
+    _Doc doc, {
+    required Set<String> sessionIds,
+    required bool includeDiagnostics,
+    bool includeAllLocalRecords = false,
+  }) {
     final chunks = doc.chunks.where((item) => sessionIds.contains(item.sessionId)).length;
     final notes = doc.notes.where((item) => sessionIds.contains(item.sessionId)).length;
-    final pending =
-        doc.candidates.where((item) => sessionIds.contains(item.sessionId) && item.status == 'pending').length;
-    final tasks =
-        doc.tasks.where((item) => item.sourceSessionId != null && sessionIds.contains(item.sourceSessionId)).toList();
+    // The preview model predates sessionless candidates. For whole-store
+    // deletion this field represents every candidate row that will be removed,
+    // including reviewed tombstones.
+    final pending = includeAllLocalRecords
+        ? doc.candidates.length
+        : doc.candidates.where((item) => sessionIds.contains(item.sessionId) && item.status == 'pending').length;
+    final tasks = includeAllLocalRecords
+        ? doc.tasks
+        : doc.tasks.where((item) => item.sourceSessionId != null && sessionIds.contains(item.sourceSessionId)).toList();
     return PrivacyDeletionPreview(
       sessionCount: doc.sessions.where((item) => sessionIds.contains(item.localId)).length,
       chunkCount: chunks,
@@ -1025,18 +1058,27 @@ class PrivacyStore {
     required DateTime at,
     bool clearDiagnostics = false,
     bool recordReceipt = true,
+    bool clearAllCandidates = false,
+    bool clearAllTasks = false,
   }) {
     final chunks = doc.chunks.where((item) => sessionIds.contains(item.sessionId)).length;
     final notes = doc.notes.where((item) => sessionIds.contains(item.sessionId)).length;
-    final candidates = doc.candidates.where((item) => sessionIds.contains(item.sessionId) && !item.tombstone).length;
-    final linked =
-        doc.tasks.where((item) => item.sourceSessionId != null && sessionIds.contains(item.sourceSessionId)).toList();
+    final candidates = clearAllCandidates
+        ? doc.candidates.length
+        : doc.candidates.where((item) => sessionIds.contains(item.sessionId) && !item.tombstone).length;
+    final linked = clearAllTasks
+        ? doc.tasks.toList()
+        : doc.tasks.where((item) => item.sourceSessionId != null && sessionIds.contains(item.sourceSessionId)).toList();
     var excerpts = 0;
     var kept = 0;
     var deletedTasks = 0;
     if (deleteAcceptedTasks) {
       deletedTasks = linked.length;
-      doc.tasks.removeWhere((item) => item.sourceSessionId != null && sessionIds.contains(item.sourceSessionId));
+      if (clearAllTasks) {
+        doc.tasks.clear();
+      } else {
+        doc.tasks.removeWhere((item) => item.sourceSessionId != null && sessionIds.contains(item.sourceSessionId));
+      }
     } else {
       doc.tasks = doc.tasks.map((task) {
         if (task.sourceSessionId == null || !sessionIds.contains(task.sourceSessionId)) return task;
@@ -1048,7 +1090,11 @@ class PrivacyStore {
     doc.sessions.removeWhere((item) => sessionIds.contains(item.localId));
     doc.chunks.removeWhere((item) => sessionIds.contains(item.sessionId));
     doc.notes.removeWhere((item) => sessionIds.contains(item.sessionId));
-    doc.candidates.removeWhere((item) => sessionIds.contains(item.sessionId));
+    if (clearAllCandidates) {
+      doc.candidates.clear();
+    } else {
+      doc.candidates.removeWhere((item) => sessionIds.contains(item.sessionId));
+    }
     var diagnostics = 0;
     if (clearDiagnostics) {
       diagnostics = doc.diagnostics.length;
@@ -1085,13 +1131,84 @@ class PrivacyStore {
     required String suggestedType,
     required String title,
     required String? proposedTimeText,
-  }) =>
-      [
-        sourceRef.trim().toLowerCase(),
-        suggestedType.trim().toLowerCase(),
-        title.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' '),
-        proposedTimeText?.trim().toLowerCase() ?? '',
-      ].join('|');
+  }) {
+    final canonical = [
+      sourceRef.trim().toLowerCase(),
+      suggestedType.trim().toLowerCase(),
+      title.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' '),
+      proposedTimeText?.trim().toLowerCase() ?? '',
+    ].join('|');
+    return _hashedFingerprint(canonical);
+  }
+
+  static String _hashedFingerprint(String legacyFingerprint) =>
+      'sha256:${sha256.convert(utf8.encode(legacyFingerprint))}';
+
+  static void _migrateCandidateFingerprints(_Doc doc) {
+    doc.candidates = doc.candidates.map((candidate) {
+      final fingerprint = candidate.fingerprint;
+      if (fingerprint == null || RegExp(r'^sha256:[0-9a-f]{64}$').hasMatch(fingerprint)) return candidate;
+      return _candidateWithFingerprint(candidate, _hashedFingerprint(fingerprint));
+    }).toList();
+  }
+
+  static PrivacyCandidateRecord _candidateWithFingerprint(
+    PrivacyCandidateRecord candidate,
+    String fingerprint,
+  ) =>
+      PrivacyCandidateRecord(
+        candidateId: candidate.candidateId,
+        sessionId: candidate.sessionId,
+        captureId: candidate.captureId,
+        sequence: candidate.sequence,
+        proposedText: candidate.proposedText,
+        excerpt: candidate.excerpt,
+        extractionKind: candidate.extractionKind,
+        extractionVersion: candidate.extractionVersion,
+        origin: candidate.origin,
+        status: candidate.status,
+        createdAt: candidate.createdAt,
+        expiresAt: candidate.expiresAt,
+        tombstone: candidate.tombstone,
+        suggestedType: candidate.suggestedType,
+        description: candidate.description,
+        proposedTimeText: candidate.proposedTimeText,
+        proposedStartAt: candidate.proposedStartAt,
+        proposedEndAt: candidate.proposedEndAt,
+        timezone: candidate.timezone,
+        uncertainty: candidate.uncertainty,
+        sourceRef: candidate.sourceRef,
+        fingerprint: fingerprint,
+      );
+
+  static String? _referencedProjectId(_Doc doc, PrivacyCandidateRecord candidate) {
+    final sources = <String>[candidate.proposedText, if (candidate.description != null) candidate.description!];
+    final matches = doc.projects.where((project) {
+      if (project.archived) return false;
+      final projectTokens = _projectMatchTokens(project.name);
+      return projectTokens.isNotEmpty && sources.any((source) => _containsTokenPhrase(source, projectTokens));
+    }).toList();
+    return matches.length == 1 ? matches.single.projectId : null;
+  }
+
+  static List<String> _projectMatchTokens(String value) =>
+      value.toLowerCase().split(RegExp(r'[^a-z0-9]+')).where((token) => token.isNotEmpty).toList();
+
+  static bool _containsTokenPhrase(String value, List<String> phrase) {
+    final tokens = _projectMatchTokens(value);
+    if (phrase.isEmpty || phrase.length > tokens.length) return false;
+    for (var start = 0; start <= tokens.length - phrase.length; start++) {
+      var matches = true;
+      for (var offset = 0; offset < phrase.length; offset++) {
+        if (tokens[start + offset] != phrase[offset]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) return true;
+    }
+    return false;
+  }
 
   static PrivacyCandidateRecord _reviewedCandidate(PrivacyCandidateRecord candidate, String status) =>
       PrivacyCandidateRecord(

@@ -21,7 +21,124 @@ class _Credentials implements PrivacyIntelligenceCredentialSource {
 }
 
 void main() {
-  test('assistant receives only minimal open-task state and saves suggestions for review', () async {
+  test('session reprocessing sends retained authorized text and survives retry and dismissal', () async {
+    final directory = await Directory.systemTemp.createTemp('privacy-session-reprocess');
+    addTearDown(() => directory.delete(recursive: true));
+    final store = await PrivacyStore.open(directory);
+    final now = DateTime.now();
+    final opened = await store.openSession(
+      captureId: 'reprocess-capture',
+      purpose: 'personal',
+      ownerPurpose: 'task capture',
+      consentBasis: 'self_only',
+      protocolVersion: 1,
+      policyRevision: 1,
+      at: now,
+    );
+    final sessionId = opened.value!.localId;
+    await store.upsertChunk(
+        captureId: 'reprocess-capture', sequence: 1, machineText: 'Buy milk tomorrow. Call Alex about the trip.');
+    var unavailable = true;
+    var calls = 0;
+    final client = PrivacyIntelligenceClient(
+        credentials: _Credentials(),
+        httpClient: MockClient((request) async {
+          calls++;
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          expect(request.url.path, '/v1/intelligence/extract');
+          expect(body['text'], 'Buy milk tomorrow. Call Alex about the trip.');
+          expect(body['source_kind'], 'self_authored_transcript');
+          expect(body['authorization_basis'], 'self_only');
+          expect(body['source_ref'], 'session:$sessionId');
+          if (unavailable) return http.Response('{}', 503);
+          return http.Response(
+              jsonEncode({
+                'extractor': 'ollama-structured-v1',
+                'suggestions': [
+                  {
+                    'suggested_type': 'task',
+                    'title': 'Buy milk',
+                    'source_ref': body['source_ref'],
+                    'supporting_excerpt': 'Buy milk tomorrow.',
+                    'uncertainty': 0.1,
+                    'review_state': 'pending'
+                  },
+                  {
+                    'suggested_type': 'task',
+                    'title': 'Call Alex',
+                    'source_ref': body['source_ref'],
+                    'supporting_excerpt': 'Call Alex about the trip.',
+                    'uncertainty': 0.1,
+                    'review_state': 'pending',
+                  }
+                ],
+              }),
+              200);
+        }));
+    addTearDown(client.close);
+    final coordinator = PrivacyIntelligenceCoordinator(client: client, store: store);
+    Future<int> reprocess() =>
+        coordinator.reprocessSession(sessionId: sessionId, timezone: 'America/Toronto', now: now);
+    await expectLater(reprocess(), throwsA(isA<Exception>()));
+    expect(await store.chunks(sessionId), hasLength(1));
+    unavailable = false;
+    expect(await reprocess(), 2);
+    expect(await reprocess(), 0);
+    final candidates = await store.pendingCandidates();
+    await store.acceptCandidate(candidates.first.candidateId, editedTitle: 'Buy oat milk');
+    await store.dismissCandidate(candidates.last.candidateId);
+    expect(await reprocess(), 0);
+    final reopened = await PrivacyStore.open(directory);
+    expect(await reopened.pendingCandidates(), isEmpty);
+    expect((await reopened.tasks()).single.title, 'Buy oat milk');
+    expect(await reopened.chunks(sessionId), hasLength(1));
+    expect(calls, 4);
+  });
+
+  test('deleted session fences an in-flight extraction result', () async {
+    final directory = await Directory.systemTemp.createTemp('privacy-deleted-reprocess');
+    addTearDown(() => directory.delete(recursive: true));
+    final store = await PrivacyStore.open(directory);
+    final now = DateTime.now();
+    final session = (await store.openSession(
+            captureId: 'deleted-capture',
+            purpose: 'personal',
+            ownerPurpose: 'synthetic',
+            consentBasis: 'self_only',
+            protocolVersion: 1,
+            policyRevision: 1,
+            at: now))
+        .value!;
+    await store.upsertChunk(captureId: session.captureId, sequence: 1, machineText: 'Buy milk tomorrow.');
+    final client = PrivacyIntelligenceClient(
+        credentials: _Credentials(),
+        httpClient: MockClient((request) async {
+          await store.deleteSession(session.localId, deleteAcceptedTasks: false);
+          return http.Response(
+              jsonEncode({
+                'extractor': 'ollama-structured-v1',
+                'suggestions': [
+                  {
+                    'suggested_type': 'task',
+                    'title': 'Buy milk',
+                    'source_ref': 'session:${session.localId}',
+                    'supporting_excerpt': 'Buy milk tomorrow.',
+                    'uncertainty': 0.1,
+                    'review_state': 'pending',
+                  }
+                ]
+              }),
+              200);
+        }));
+    addTearDown(client.close);
+    final coordinator = PrivacyIntelligenceCoordinator(client: client, store: store);
+    await expectLater(
+        coordinator.reprocessSession(sessionId: session.localId, timezone: 'UTC', now: now), throwsStateError);
+    expect(await store.pendingCandidates(), isEmpty);
+    expect(await store.sessions(), isEmpty);
+  });
+
+  test('assistant receives minimal task state and counts only newly saved suggestions', () async {
     final directory = await Directory.systemTemp.createTemp('privacy-coordinator-assistant');
     final store = await PrivacyStore.open(directory);
     final project = await store.createProject('Presentation');
@@ -63,11 +180,15 @@ void main() {
     );
     final coordinator = PrivacyIntelligenceCoordinator(client: client, store: store);
 
-    await coordinator.ask(
-      message: 'Remind me to email the deck',
-      timezone: 'America/Toronto',
-      now: DateTime(2026, 10, 13, 9),
-    );
+    Future<PrivacyIntelligenceAssistantResult> ask() => coordinator.ask(
+          message: 'Remind me to email the deck',
+          timezone: 'America/Toronto',
+          now: DateTime(2026, 10, 13, 9),
+        );
+
+    final first = await ask();
+    expect(first.savedSuggestionCount, 1);
+    expect((await ask()).savedSuggestionCount, 0);
 
     final projected = (requestBody!['open_tasks'] as List<dynamic>).cast<Map<String, dynamic>>();
     expect(projected, hasLength(1));
@@ -80,10 +201,15 @@ void main() {
     expect(jsonEncode(requestBody), isNot(contains('private note')));
     expect(jsonEncode(requestBody), isNot(contains('private source excerpt')));
     expect((await store.tasks()), hasLength(2));
-    expect((await store.pendingCandidates()).single.proposedText, 'Email the deck');
+    final candidate = (await store.pendingCandidates()).single;
+    expect(candidate.proposedText, 'Email the deck');
+
+    await store.dismissCandidate(candidate.candidateId);
+    expect((await ask()).savedSuggestionCount, 0);
+    expect(await store.pendingCandidates(), isEmpty);
   });
 
-  test('authorized extraction persists provenance but does not auto-promote', () async {
+  test('authorized extraction counts only new pending candidates and respects tombstones', () async {
     final directory = await Directory.systemTemp.createTemp('privacy-coordinator-extract');
     final store = await PrivacyStore.open(directory);
     final client = PrivacyIntelligenceClient(
@@ -94,7 +220,7 @@ void main() {
         expect(body['authorization_basis'], 'participants_consented');
         return http.Response(
           jsonEncode(<String, Object?>{
-            'extractor': 'ollama-structured-v1',
+            'extractor': 'ollama-structured-v2',
             'suggestions': <Object?>[
               <String, Object?>{
                 'suggested_type': 'habit',
@@ -112,27 +238,92 @@ void main() {
     );
     final coordinator = PrivacyIntelligenceCoordinator(client: client, store: store);
 
-    final count = await coordinator.extract(
-      sourceRef: 'session:s1',
-      sourceKind: PrivacyIntelligenceSourceKind.consentedConversation,
-      authorizationBasis: PrivacyIntelligenceAuthorizationBasis.participantsConsented,
-      text: 'I will review notes',
-      timezone: 'America/Toronto',
-      now: DateTime.utc(2026, 10, 13),
-      sessionId: 's1',
-      captureId: 'c1',
-    );
+    Future<int> extract() => coordinator.extract(
+          sourceRef: 'session:s1',
+          sourceKind: PrivacyIntelligenceSourceKind.consentedConversation,
+          authorizationBasis: PrivacyIntelligenceAuthorizationBasis.participantsConsented,
+          text: 'I will review notes',
+          timezone: 'America/Toronto',
+          now: DateTime.utc(2026, 10, 13),
+          sessionId: 's1',
+          captureId: 'c1',
+        );
 
-    expect(count, 1);
+    expect(await extract(), 1);
+    expect(await extract(), 0);
     expect(await store.tasks(), isEmpty);
     expect(await store.habits(), isEmpty);
     final candidate = (await store.pendingCandidates()).single;
     expect(candidate.sourceRef, 'session:s1');
     expect(candidate.uncertainty, 0.25);
     expect(candidate.suggestedType, 'habit');
+    expect(candidate.extractionKind, 'structured_personal_action');
+    expect(candidate.extractionVersion, 'ollama-structured-v2');
+    expect(candidate.origin, 'intelligence_suggestion');
+
+    await store.dismissCandidate(candidate.candidateId);
+    expect(await extract(), 0);
+    expect(await store.pendingCandidates(), isEmpty);
   });
 
-  test('proactive deadline advice persists once and dismissal prevents resurfacing', () async {
+  test('repeated refresh replaces by fingerprint and keeps dismissals tombstoned', () async {
+    final directory = await Directory.systemTemp.createTemp('privacy-coordinator-refresh');
+    final store = await PrivacyStore.open(directory);
+    var calls = 0;
+    final client = PrivacyIntelligenceClient(
+      credentials: _Credentials(),
+      httpClient: MockClient((request) async {
+        calls++;
+        return http.Response(
+          jsonEncode(<String, Object?>{
+            'extractor': 'ollama-structured-v2',
+            'suggestions': <Object?>[
+              <String, Object?>{
+                'suggested_type': 'task',
+                'title': 'Buy milk',
+                'source_ref': 'session:s1',
+                'supporting_excerpt': 'Buy milk tomorrow',
+                'uncertainty': 0.1,
+                'review_state': 'pending',
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+    );
+    final coordinator = PrivacyIntelligenceCoordinator(client: client, store: store);
+
+    final first = await coordinator.extract(
+      sourceRef: 'session:s1',
+      sourceKind: PrivacyIntelligenceSourceKind.selfAuthoredTranscript,
+      authorizationBasis: PrivacyIntelligenceAuthorizationBasis.selfOnly,
+      text: 'Buy milk tomorrow',
+      timezone: 'America/Toronto',
+      now: DateTime.utc(2026, 10, 13),
+      sessionId: 's1',
+      captureId: 'c1',
+    );
+    expect(first, 1);
+    final candidate = (await store.pendingCandidates()).single;
+    await store.dismissCandidate(candidate.candidateId);
+    expect(
+        await coordinator.extract(
+          sourceRef: 'session:s1',
+          sourceKind: PrivacyIntelligenceSourceKind.selfAuthoredTranscript,
+          authorizationBasis: PrivacyIntelligenceAuthorizationBasis.selfOnly,
+          text: 'Buy milk tomorrow',
+          timezone: 'America/Toronto',
+          now: DateTime.utc(2026, 10, 13),
+          sessionId: 's1',
+          captureId: 'c1',
+        ),
+        0);
+    expect(calls, 2);
+    expect(await store.pendingCandidates(), isEmpty);
+  });
+
+  test('proactive refresh counts only new pending advice and dismissal prevents resurfacing', () async {
     final directory = await Directory.systemTemp.createTemp('privacy-coordinator-proactive');
     final store = await PrivacyStore.open(directory);
     final dueAt = DateTime(2026, 10, 14, 17);
@@ -169,21 +360,24 @@ void main() {
     );
     final coordinator = PrivacyIntelligenceCoordinator(client: client, store: store);
 
-    await coordinator.evaluateProactive(
-      timezone: 'America/Toronto',
-      now: DateTime(2026, 10, 13, 9),
-    );
+    Future<int> refresh() => coordinator.evaluateProactive(
+          timezone: 'America/Toronto',
+          now: DateTime(2026, 10, 13, 9),
+        );
+
+    expect(await refresh(), 1);
+    expect(await refresh(), 0);
     final pending = await store.pendingCandidates();
     expect(pending, hasLength(1));
     expect(pending.single.suggestedType, 'advice');
+    expect(pending.single.extractionKind, 'deterministic_deadline_risk');
+    expect(pending.single.extractionVersion, 'deadline-risk-v1');
+    expect(pending.single.origin, 'proactive_intelligence');
 
     await store.dismissCandidate(pending.single.candidateId);
-    await coordinator.evaluateProactive(
-      timezone: 'America/Toronto',
-      now: DateTime(2026, 10, 13, 9),
-    );
+    expect(await refresh(), 0);
 
-    expect(calls, 2);
+    expect(calls, 3);
     expect(await store.pendingCandidates(), isEmpty);
     expect(await store.tasks(), hasLength(1));
   });

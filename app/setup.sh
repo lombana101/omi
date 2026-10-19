@@ -132,6 +132,16 @@ function generate_ios_custom_config() {
   fi
 }
 
+function generate_ios_privacy_custom_config() {
+  cat > ios/Flutter/Custom.xcconfig <<'EOF'
+// Local privacy build. Not the stock Omi bundle. Do not commit.
+GOOGLE_REVERSE_CLIENT_ID=com.googleusercontent.apps.1031333818730-dusn243nct6i5rgfpfkj5mchuj1qnmde
+APP_BUNDLE_IDENTIFIER=com.sergiolombana.omi.privacy
+BUNDLE_DISPLAY_NAME=Omi Privacy
+DEVELOPMENT_TEAM=W6LC5NFNZW
+EOF
+}
+
 ######################################
 # Setup Firebase with prebuilt configs
 ######################################
@@ -554,6 +564,38 @@ function run_build_ios() {
     && flutter run --flavor "$flavor" -d "$device_id" "${flutter_args[@]}"
 }
 
+function run_privacy_build_ios() {
+  local device_id
+  device_id=$(select_ios_device) || return 1
+  check_ios_prerequisites || return 1
+  local mode_flag
+  mode_flag=$(mobile_build_mode_flag) || return 1
+  local flutter_args=(
+    --flavor privacy
+    -t lib/privacy_main.dart
+    --dart-define=OMI_PRIVACY_CAPTURE=true
+    --dart-define=OMI_APP_PROFILE=local_dev
+    --dart-define=OMI_API_BASE_URL="$LOCAL_API_BASE_URL"
+    --dart-define=OMI_FIREBASE_AUTH_EMULATOR_HOST="$LOCAL_DEV_HOST"
+  )
+  # Simulator UUIDs differ from physical-device identifiers. The native policy
+  # additionally restricts this opt-in to DEBUG simulator binaries.
+  if [[ "$device_id" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
+    flutter_args+=(--dart-define=OMI_PRIVACY_SIMULATOR_STORAGE=true)
+  fi
+  if [[ -n "$mode_flag" ]]; then
+    flutter_args+=("$mode_flag")
+  fi
+  local provenance_def
+  while IFS= read -r provenance_def; do
+    [[ -n "$provenance_def" ]] && flutter_args+=("$provenance_def")
+  done < <(build_provenance_define_lines)
+  flutter pub get \
+    && pushd ios && pod install --repo-update && popd \
+    && dart run build_runner build \
+    && flutter run -d "$device_id" "${flutter_args[@]}"
+}
+
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 case "${1}" in
@@ -568,6 +610,11 @@ case "${1}" in
         && setup_firebase_with_service_account_ios \
         && generate_ios_custom_config Prod omi-beta \
         && run_build_ios prod --dart-define=OMI_APP_PROFILE=mobile_beta
+    elif [[ "${2:-}" == "privacy" ]]; then
+      prepare_mobile_build_env dev \
+        && setup_firebase \
+        && generate_ios_privacy_custom_config \
+        && run_privacy_build_ios
     else
       prepare_mobile_build_env dev \
         && setup_firebase \

@@ -122,6 +122,8 @@ class OllamaIntelligenceClient:
         body = {
             'model': self._model,
             'stream': False,
+            # Keep interactive structured output inside the client deadline.
+            'think': False,
             'format': output_type.model_json_schema(),
             'options': {'temperature': 0},
             'messages': [

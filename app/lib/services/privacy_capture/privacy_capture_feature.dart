@@ -180,7 +180,10 @@ class PrivacyCaptureHost {
       live.journal = PrivacyStoreJournal(store!);
       await live.onAppStart();
       bootError = null;
-    } catch (_) {
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('Privacy store startup failed: ${error.runtimeType}');
+      }
       store = null;
       bootError = PrivacyCopy.storeUnavailable;
     }

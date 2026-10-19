@@ -4,6 +4,63 @@ Snapshot date: 2026-10-15. This matrix distinguishes implementation from live
 deployment. A checked-in file or passing mocked test is not evidence that the
 Ubuntu service or iOS-to-server path is live.
 
+## Mac verification update — 2026-10-19
+
+The original Ubuntu matrix below is historical and remains unchanged by this
+local verification. Ubuntu deployment and physical-iPhone-to-Ubuntu acceptance
+are still pending.
+
+Tested source: feature branch fast-forwarded to `f6bb7bb1ab`, plus the current
+uncommitted build/reprocessing repair. Prior app/store work was preserved.
+
+- Fixed dangling privacy configuration IDs in the Xcode project. Added real
+  project/Runner/watch/widget configurations, isolated Runner-only Flutter/Pods
+  settings from extensions, and mapped privacy configurations in CocoaPods.
+- `bash setup.sh ios privacy` explicitly selects the privacy scheme and entrypoint;
+  ordinary dev/beta command selection is preserved. Debug and Profile settings
+  queries resolve successfully to the matching privacy configuration and app ID.
+- A fresh Debug-privacy simulator artifact built, installed, and launched. The
+  inspected parent ID was `com.sergiolombana.omi.privacy`; its embedded widget ID
+  was `com.sergiolombana.omi.privacy.widget`.
+- The interrupted-session gesture previously called only the local regex
+  extractor. It now calls the owner-authenticated Personal Intelligence API via
+  the coordinator, sharing session source identity with intelligent extraction.
+- Both session extraction gestures use retained corrected transcript/owner notes
+  and persisted consent. Atomic source-existence checks fence late model results
+  after source deletion. Suggestions remain pending until accepted.
+- Real simulator execution exposed the interactive failure with the installed
+  thinking-enabled `gemma4:latest`. Its `/api/show` metadata reported default
+  thinking enabled and support for disabling it. Structured requests now set
+  `think: false`. With the normal 45-second backend timeout, a direct synthetic
+  request returned HTTP 200 and two suggestions in 12.68 seconds. No timeout
+  increase is part of the fix.
+- The opt-in live integration test passed in the iPhone 15 Pro simulator against
+  the real loopback API and Ollama: actual reprocess gesture, saved suggestions,
+  second processing request, dismissal, and store reopen/persistence. Total live
+  test execution was 36 seconds after the build. Only synthetic text was used.
+- Hermetic verification: 29 focused app tests passed across coordinator, V2
+  store, shell, and intelligence UI; 86 backend API/service/TimeTree tests passed.
+  The app tests include backend failure/retry, duplicate suppression, accepted
+  edited-task retention, dismissal tombstones, and source-deletion races.
+- Backend preflight: latest run 16 passed, 0 failed (10 optional warnings); an
+  earlier run reported 17 passed and 9 warnings. Root `make
+  preflight` ran and failed its UI-evidence gate because no PR body or tracked
+  screenshot reference was available. It is not recorded as a full preflight pass.
+- A separate smoke run of the normal privacy entrypoint exposed simulator
+  data-protection attestation failure. A native probe confirmed data protection
+  false and backup exclusion true. The wrapper now explicitly opts debug
+  simulators into local test storage; physical/release builds keep the strict
+  protection check. Native host and debug/release simulator policy tests passed:
+  2 tests, 9 assertions, no failures. The normal `privacy_main.dart` entrypoint
+  was then rebuilt/installed/launched with the simulator opt-in; an agent-flutter
+  connection, snapshot, and screenshot confirmed the local-store error was gone.
+  The existing protection-failure/store-replacement regression also passed,
+  as did the native engine-lifecycle and batch-audio checks. Focused analysis
+  reported no issues. This is not physical-device encryption proof.
+- Store reopen is persistence evidence; this run does not claim a separate
+  physical-device or Ubuntu process-restart verification. Reprocessing uses saved
+  text and cannot recover missing audio/transcripts.
+
 | Workstream | Implemented | Unit tested | Integration tested | Deployed on Ubuntu | Physically verified | Current evidence / blocker |
 |---|---|---|---|---|---|---|
 | Owner-authenticated standalone API | Yes, in this branch | Yes; hermetic API tests pass | Mocked only | No | No | Ubuntu SSH authentication unavailable |

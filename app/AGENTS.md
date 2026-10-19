@@ -21,9 +21,9 @@ envied, json_serializable, pigeon (`lib/pigeon_interfaces.dart` → `lib/gen/` +
 
 ### Setup Sequence
 ```bash
-bash setup.sh ios    # or: bash setup.sh android
+bash setup.sh ios  # or android; privacy: ios privacy
 ```
-This handles: pub get, build_runner, gen-l10n, and flavor configuration.
+Runs pub get, build_runner, gen-l10n, and flavor setup.
 
 For physical-device builds, use the wrapper: it owns `dev + local_dev` and `prod + mobile_beta` pairing plus auth env setup. Direct builds must first run
 `scripts/validate_mobile_build_config.sh --flavor <dev|prod> --profile <profile>`

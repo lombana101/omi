@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:uuid/uuid.dart';
@@ -21,6 +23,12 @@ Future<String> _privacyTimezone() async {
   } catch (_) {
     return 'UTC';
   }
+}
+
+String _manualIntelligenceSourceRef(String text) {
+  final normalized = text.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+  final digest = sha256.convert(utf8.encode('omi-privacy-manual-v1\u0000$normalized'));
+  return 'manual:$digest';
 }
 
 class PrivacyAssistantTab extends StatefulWidget {
@@ -52,6 +60,7 @@ class _PrivacyAssistantTabState extends State<PrivacyAssistantTab> {
   bool _busy = false;
   String? _status;
   PrivacyIntelligenceAssistantResponse? _response;
+  int _savedAssistantSuggestionCount = 0;
   List<PrivacyIntelligenceEvent> _events = const [];
   Map<String, String> _calendarNames = const {};
   String? _reconcileOperationId;
@@ -93,6 +102,7 @@ class _PrivacyAssistantTabState extends State<PrivacyAssistantTab> {
           subtitle: PrivacyCopy.assistantDescription,
           onOpenSwitcher: widget.onOpenSwitcher ?? () {},
           trailing: OmiIconButton.filled(
+            key: const Key('privacy_intelligence_refresh'),
             icon: const Icon(Icons.refresh_rounded),
             label: PrivacyCopy.refreshCalendar,
             onPressed: _busy ? null : _refreshCalendar,
@@ -153,7 +163,7 @@ class _PrivacyAssistantTabState extends State<PrivacyAssistantTab> {
               if (response != null) ...[
                 PrivacyCard(child: Text(response.message, style: PrivacyScope.of(context).body())),
                 for (final event in response.events) _eventCard(event),
-                if (response.taskSuggestions.isNotEmpty)
+                if (_savedAssistantSuggestionCount > 0)
                   const PrivacyCard(child: Text(PrivacyCopy.pendingSuggestionsSaved)),
                 if (response.calendarProposal != null)
                   PrivacyButton(
@@ -214,15 +224,16 @@ class _PrivacyAssistantTabState extends State<PrivacyAssistantTab> {
     final text = _message.text.trim();
     if (coordinator == null || text.isEmpty) return;
     await _run(() async {
-      final response = await coordinator.ask(
+      final result = await coordinator.ask(
         message: text,
         timezone: await (widget.timezoneLoader ?? _privacyTimezone)(),
         now: widget.now,
       );
       if (!mounted) return;
       setState(() {
-        _response = response;
-        _status = response.taskSuggestions.isEmpty ? null : PrivacyCopy.pendingSuggestionsSaved;
+        _response = result.response;
+        _savedAssistantSuggestionCount = result.savedSuggestionCount;
+        _status = result.savedSuggestionCount == 0 ? null : PrivacyCopy.pendingSuggestionsSaved;
       });
       await widget.onChanged();
     });
@@ -234,7 +245,7 @@ class _PrivacyAssistantTabState extends State<PrivacyAssistantTab> {
     if (coordinator == null || text.isEmpty) return;
     await _run(() async {
       final count = await coordinator.extract(
-        sourceRef: 'manual:${const Uuid().v4()}',
+        sourceRef: _manualIntelligenceSourceRef(text),
         sourceKind: PrivacyIntelligenceSourceKind.manualText,
         authorizationBasis: PrivacyIntelligenceAuthorizationBasis.selfOnly,
         text: text,
@@ -250,15 +261,39 @@ class _PrivacyAssistantTabState extends State<PrivacyAssistantTab> {
   Future<void> _refreshCalendar({bool silent = false}) async {
     await _run(
       () async {
+        var proactiveSaved = 0;
+        Object? proactiveFailure;
         final coordinator = _coordinator;
         if (coordinator != null) {
-          await coordinator.evaluateProactive(
-            timezone: await (widget.timezoneLoader ?? _privacyTimezone)(),
-            now: widget.now,
-          );
-          await widget.onChanged();
+          try {
+            proactiveSaved = await coordinator.evaluateProactive(
+              timezone: await (widget.timezoneLoader ?? _privacyTimezone)(),
+              now: widget.now,
+            );
+            if (mounted) await widget.onChanged();
+          } catch (error) {
+            proactiveFailure = error;
+          }
         }
-        await _loadCalendar(silent: silent);
+        try {
+          await _loadCalendar(silent: true);
+        } catch (_) {
+          if (proactiveSaved == 0) rethrow;
+          if (!silent && mounted) {
+            setState(() => _status = PrivacyCopy.pendingSuggestionsSaved);
+          }
+          return;
+        }
+        if (silent || !mounted) return;
+        setState(() {
+          if (proactiveSaved > 0) {
+            _status = PrivacyCopy.pendingSuggestionsSaved;
+          } else if (proactiveFailure != null) {
+            _status = _failureStatus(proactiveFailure);
+          } else {
+            _status = null;
+          }
+        });
       },
       silent: silent,
     );
@@ -413,17 +448,19 @@ class _PrivacyAssistantTabState extends State<PrivacyAssistantTab> {
       await action();
     } on PrivacyIntelligenceClientException catch (error) {
       if (!mounted || silent) return;
-      setState(() {
-        _status = error.kind == PrivacyIntelligenceFailureKind.notConfigured
-            ? PrivacyCopy.intelligenceNotConfigured
-            : PrivacyCopy.intelligenceUnavailable;
-      });
-    } catch (_) {
+      setState(() => _status = _failureStatus(error));
+    } catch (error) {
       if (!mounted || silent) return;
-      setState(() => _status = PrivacyCopy.intelligenceUnavailable);
+      setState(() => _status = _failureStatus(error));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  String _failureStatus(Object error) {
+    return error is PrivacyIntelligenceClientException && error.kind == PrivacyIntelligenceFailureKind.notConfigured
+        ? PrivacyCopy.intelligenceNotConfigured
+        : PrivacyCopy.intelligenceUnavailable;
   }
 }
 
@@ -477,20 +514,10 @@ class _PrivacyIntelligenceExtractionButtonState extends State<PrivacyIntelligenc
     final coordinator = PrivacyIntelligenceCoordinator(client: client, store: widget.store);
     setState(() => _busy = true);
     try {
-      final mixed = widget.session.consentBasis == 'participants_consented';
-      final count = await coordinator.extract(
-        sourceRef: 'session:${widget.session.localId}',
-        sourceKind: mixed
-            ? PrivacyIntelligenceSourceKind.consentedConversation
-            : PrivacyIntelligenceSourceKind.selfAuthoredTranscript,
-        authorizationBasis: mixed
-            ? PrivacyIntelligenceAuthorizationBasis.participantsConsented
-            : PrivacyIntelligenceAuthorizationBasis.selfOnly,
-        text: text,
+      final count = await coordinator.reprocessSession(
+        sessionId: widget.session.localId,
         timezone: await _privacyTimezone(),
         now: widget.now,
-        sessionId: widget.session.localId,
-        captureId: widget.session.captureId,
       );
       if (!mounted) return;
       setState(() => _status = count == 0 ? PrivacyCopy.noGroundedActions : PrivacyCopy.pendingSuggestionsSaved);

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 
 import 'package:omi/backend/preferences.dart';
 import 'package:omi/services/privacy_capture/privacy_action_config.dart';
@@ -195,6 +196,7 @@ class _PrivacyShellState extends State<PrivacyShell> with WidgetsBindingObserver
                   TickerMode(
                     enabled: _tab == 1,
                     child: _SessionsTab(
+                      intelligenceClient: widget.intelligenceClient,
                       store: _store,
                       now: _now,
                       onChanged: _refresh,
@@ -1065,6 +1067,7 @@ Future<String> _discoverPendant() async {
 
 class _SessionsTab extends StatefulWidget {
   const _SessionsTab({
+    this.intelligenceClient,
     required this.store,
     required this.now,
     required this.onChanged,
@@ -1072,6 +1075,7 @@ class _SessionsTab extends StatefulWidget {
     this.quickMessage,
   });
 
+  final PrivacyIntelligenceClient? intelligenceClient;
   final PrivacyStore? store;
   final DateTime now;
   final Future<void> Function() onChanged;
@@ -1223,6 +1227,17 @@ class _SessionsTabState extends State<_SessionsTab> {
                                           ),
                                       ],
                                     ),
+                                    if (session.incomplete || session.outcome == 'interrupted') ...[
+                                      const SizedBox(height: PrivacySpace.xs),
+                                      Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: PrivacyButton.secondary(
+                                          key: Key('privacy_reprocess_${session.localId}'),
+                                          label: 'Reprocess',
+                                          onPressed: () => _openSession(store, session),
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -1242,7 +1257,8 @@ class _SessionsTabState extends State<_SessionsTab> {
   Future<void> _openSession(PrivacyStore store, PrivacySessionRecord session) async {
     final receipt = await _routeToPrivacyPage(
       context,
-      _SessionDetail(store: store, session: session, onChanged: widget.onChanged),
+      _SessionDetail(
+          store: store, session: session, onChanged: widget.onChanged, intelligenceClient: widget.intelligenceClient),
     );
     if (!mounted) return;
     if (receipt is String) setState(() => _receipt = receipt);
@@ -1341,7 +1357,9 @@ class _DisclosureCard extends StatelessWidget {
 }
 
 class _SessionDetail extends StatefulWidget {
-  const _SessionDetail({required this.store, required this.session, required this.onChanged});
+  const _SessionDetail({required this.store, required this.session, required this.onChanged, this.intelligenceClient});
+
+  final PrivacyIntelligenceClient? intelligenceClient;
 
   final PrivacyStore store;
   final PrivacySessionRecord session;
@@ -1356,6 +1374,7 @@ class _SessionDetailState extends State<_SessionDetail> {
   late Future<_SessionDetailBundle> _detailFuture;
   var _deleted = false;
   var _findingSuggestions = false;
+  var _reprocessingInterrupted = false;
   String? _suggestionMessage;
   var _suggestionFailed = false;
 
@@ -1517,6 +1536,16 @@ class _SessionDetailState extends State<_SessionDetail> {
                         onPressed: _findingSuggestions ? null : _findSuggestions,
                       ),
                     ),
+                    if (session.incomplete || session.outcome == 'interrupted')
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: PrivacySpace.sm),
+                        child: PrivacyButton.secondary(
+                          key: const Key('privacy_reprocess_session'),
+                          label: _reprocessingInterrupted ? 'Reprocessing…' : 'Reprocess interrupted session',
+                          expand: true,
+                          onPressed: _reprocessingInterrupted ? null : _reprocessInterruptedSession,
+                        ),
+                      ),
                     Padding(
                       padding: const EdgeInsets.only(bottom: PrivacySpace.sm),
                       child: PrivacyIntelligenceExtractionButton(
@@ -1534,7 +1563,7 @@ class _SessionDetailState extends State<_SessionDetail> {
                         padding: const EdgeInsets.only(bottom: PrivacySpace.sm),
                         child: _PrivacyNotice(
                           icon: _suggestionFailed ? Icons.error_outline : Icons.lightbulb_outline,
-                          title: _suggestionFailed ? PrivacyCopy.loadFailed : PrivacyCopy.suggestionsReady,
+                          title: _suggestionFailed ? PrivacyCopy.intelligence : PrivacyCopy.suggestionsReady,
                           message: _suggestionMessage!,
                           kind: _suggestionFailed ? 'interrupted' : 'accent',
                         ),
@@ -1605,6 +1634,61 @@ class _SessionDetailState extends State<_SessionDetail> {
       if (!mounted) return;
       setState(() {
         _findingSuggestions = false;
+        _suggestionFailed = true;
+        _suggestionMessage = PrivacyCopy.suggestionsFailed;
+      });
+    }
+  }
+
+  Future<void> _reprocessInterruptedSession() async {
+    if (_reprocessingInterrupted) return;
+    setState(() {
+      _reprocessingInterrupted = true;
+      _suggestionMessage = null;
+      _suggestionFailed = false;
+    });
+    try {
+      final client =
+          widget.intelligenceClient ?? PrivacyIntelligenceClient(credentials: PrivacyIntelligenceCredentialStore());
+      final int added;
+      try {
+        var timezone = 'UTC';
+        try {
+          timezone = (await FlutterTimezone.getLocalTimezone()).identifier;
+        } catch (_) {
+          // Match the assistant's UTC policy when the platform cannot name its zone.
+        }
+        added = await PrivacyIntelligenceCoordinator(client: client, store: widget.store).reprocessSession(
+          sessionId: widget.session.localId,
+          timezone: timezone,
+          now: DateTime.now(),
+        );
+      } finally {
+        if (widget.intelligenceClient == null) client.close();
+      }
+      await widget.onChanged();
+      final bundle = await _load();
+      if (!mounted) return;
+      setState(() {
+        _detailFuture = SynchronousFuture(bundle);
+        _reprocessingInterrupted = false;
+        _suggestionMessage = added == 0
+            ? PrivacyCopy.noNewSuggestions
+            : '$added suggestion${added == 1 ? '' : 's'} found. Review ${added == 1 ? 'it' : 'them'} below.';
+      });
+    } on PrivacyIntelligenceClientException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _reprocessingInterrupted = false;
+        _suggestionFailed = true;
+        _suggestionMessage = error.kind == PrivacyIntelligenceFailureKind.notConfigured
+            ? PrivacyCopy.intelligenceNotConfigured
+            : PrivacyCopy.intelligenceUnavailable;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _reprocessingInterrupted = false;
         _suggestionFailed = true;
         _suggestionMessage = PrivacyCopy.suggestionsFailed;
       });
@@ -2243,6 +2327,14 @@ class _CandidateTileState extends State<_CandidateTile> {
           ),
           const SizedBox(height: PrivacySpace.sm),
           Text(widget.candidate.proposedText, style: theme.body().copyWith(fontWeight: FontWeight.w600)),
+          if (widget.candidate.description?.trim().isNotEmpty ?? false) ...[
+            const SizedBox(height: PrivacySpace.xs),
+            Text(
+              widget.candidate.description!,
+              key: Key('privacy_suggestion_description_${widget.candidate.candidateId}'),
+              style: theme.body(),
+            ),
+          ],
           const SizedBox(height: PrivacySpace.xs),
           Text(
             widget.candidate.excerpt,
@@ -2280,11 +2372,13 @@ class _CandidateTileState extends State<_CandidateTile> {
                 ),
               if (taskSuggestion)
                 PrivacyButton.secondary(
+                  key: Key('privacy_edit_accept_action_${widget.candidate.candidateId}'),
                   label: PrivacyCopy.editAccept,
                   onPressed: _busy ? null : _editAndAccept,
                 ),
               if (widget.candidate.suggestedType == 'habit')
                 PrivacyButton(
+                  key: Key('privacy_accept_habit_${widget.candidate.candidateId}'),
                   label: PrivacyCopy.acceptHabit,
                   onPressed: _busy
                       ? null
@@ -2295,6 +2389,7 @@ class _CandidateTileState extends State<_CandidateTile> {
                 ),
               if (widget.candidate.suggestedType == 'project')
                 PrivacyButton(
+                  key: Key('privacy_accept_project_${widget.candidate.candidateId}'),
                   label: PrivacyCopy.acceptProject,
                   onPressed: _busy
                       ? null
@@ -2316,6 +2411,7 @@ class _CandidateTileState extends State<_CandidateTile> {
                   onPressed: _busy ? null : _reconcileCalendar,
                 ),
               PrivacyButton.quiet(
+                key: Key('privacy_dismiss_${widget.candidate.candidateId}'),
                 label: PrivacyCopy.dismiss,
                 onPressed: _busy
                     ? null

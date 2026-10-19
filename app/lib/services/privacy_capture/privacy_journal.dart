@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 
 import 'package:omi/services/privacy_capture/privacy_capture_config.dart';
 import 'package:omi/services/privacy_capture/privacy_capture_controller.dart';
@@ -82,7 +83,10 @@ class PrivacyFileProtection {
 
   static Future<void> protect(String path) async {
     if (!Platform.isIOS) throw const PrivacyStoreUnavailable();
-    final ok = await channel.invokeMethod<bool>('protect', <String, String>{'path': path});
+    final ok = await channel.invokeMethod<bool>('protect', <String, Object>{
+      'path': path,
+      'allow_simulator_storage': kDebugMode && const bool.fromEnvironment('OMI_PRIVACY_SIMULATOR_STORAGE'),
+    });
     if (ok != true) throw const PrivacyStoreUnavailable();
   }
 }
